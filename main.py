@@ -83,9 +83,36 @@ _CLAUDE_MODEL = "claude-opus-4-5"
 # ClickHouse Query Runner
 # =============================================================================
 
+def _is_health_response(resp: http_requests.Response) -> bool:
+    """
+    Return True when the response looks like a proxy health-check ping
+    rather than an actual ClickHouse query result.
+
+    Example health body: {"status":"ok","service":"ClickHouse API"}
+    A real ClickHouse JSONCompact response always has a "meta" key.
+    """
+    try:
+        body = resp.json()
+        # Real ClickHouse JSONCompact always contains "meta" and "data"
+        if "meta" in body:
+            return False
+        # Looks like a health / error response — not query data
+        return True
+    except Exception:
+        return False
+
+
 def _parse_ch_response(resp: http_requests.Response) -> str:
-    """Parse a ClickHouse HTTP response into a readable pipe-delimited table."""
+    """
+    Parse a ClickHouse HTTP response into a readable pipe-delimited table.
+    Returns None if the response looks like a health-check (not query data).
+    """
     resp.raise_for_status()
+
+    # Reject proxy health-check responses
+    if _is_health_response(resp):
+        return None
+
     content_type = resp.headers.get("content-type", "")
 
     if "json" in content_type or resp.text.lstrip().startswith("{"):
@@ -104,8 +131,7 @@ def _parse_ch_response(resp: http_requests.Response) -> str:
             if len(rows) > 100:
                 lines.append(f"... ({len(rows) - 100} more rows — refine your query)")
             return "\n".join(lines)
-        except Exception as parse_err:
-            # Fall through to plain text
+        except Exception:
             pass
 
     lines = [l for l in resp.text.splitlines() if l.strip()]
@@ -114,23 +140,97 @@ def _parse_ch_response(resp: http_requests.Response) -> str:
     return "\n".join(lines[:101])
 
 
+def _build_strategies(base_url: str, api_token: str, sql: str):
+    """
+    Generate all (label, callable) strategy pairs to try.
+
+    Because CLICKHOUSE_API_URL may point to a FastAPI proxy rather than raw
+    ClickHouse, we try multiple PATH variants (/query, /execute, /sql, root)
+    combined with multiple HTTP methods and body formats.
+
+    The debug endpoint revealed:
+      - Root GET  → returns health JSON ({"status":"ok"}) — NOT query data
+      - Root POST → 405 Method Not Allowed
+    So the real query endpoint is almost certainly at a sub-path on the proxy.
+
+    Order (most → least likely for a FastAPI ClickHouse proxy):
+      1.  POST  <base>/query      JSON body  {"sql": "..."}
+      2.  POST  <base>/query      JSON body  {"query": "..."}
+      3.  POST  <base>/query      ?query=    param
+      4.  GET   <base>/query      ?query=    param
+      5.  POST  <base>/execute    JSON body  {"sql": "..."}
+      6.  POST  <base>/execute    JSON body  {"query": "..."}
+      7.  GET   <base>/execute    ?query=    param
+      8.  POST  <base>/sql        JSON body  {"sql": "..."}
+      9.  GET   <base>/sql        ?query=    param
+      10. POST  <base>/           body text  (raw ClickHouse HTTP)
+      11. POST  <base>/           ?query=    param  (AI4Looker style)
+      12. GET   <base>/           ?query=    param  (bare ClickHouse HTTP)
+      13. POST  <base>/           body + X-ClickHouse-Format header
+    """
+    auth_h    = {"Authorization": f"Bearer {api_token}"}
+    json_h    = {**auth_h, "Content-Type": "application/json"}
+    text_h    = {**auth_h, "Content-Type": "text/plain"}
+    sql_fmt   = sql.strip() + " FORMAT JSONCompact"
+
+    paths = {
+        "query":   f"{base_url}/query",
+        "execute": f"{base_url}/execute",
+        "sql":     f"{base_url}/sql",
+        "root":    base_url,
+    }
+
+    return [
+        # ── Proxy sub-path strategies (FastAPI wrapper) ────────────────────
+        ("POST /query  {sql:}    json",
+         lambda: http_requests.post(paths["query"],   json={"sql": sql_fmt},   headers=json_h, timeout=45)),
+        ("POST /query  {query:}  json",
+         lambda: http_requests.post(paths["query"],   json={"query": sql_fmt}, headers=json_h, timeout=45)),
+        ("POST /query  ?query=   param",
+         lambda: http_requests.post(paths["query"],   params={"query": sql_fmt}, headers=auth_h, timeout=45)),
+        ("GET  /query  ?query=   param",
+         lambda: http_requests.get(paths["query"],    params={"query": sql_fmt}, headers=auth_h, timeout=45)),
+
+        ("POST /execute {sql:}   json",
+         lambda: http_requests.post(paths["execute"], json={"sql": sql_fmt},   headers=json_h, timeout=45)),
+        ("POST /execute {query:} json",
+         lambda: http_requests.post(paths["execute"], json={"query": sql_fmt}, headers=json_h, timeout=45)),
+        ("GET  /execute ?query=  param",
+         lambda: http_requests.get(paths["execute"],  params={"query": sql_fmt}, headers=auth_h, timeout=45)),
+
+        ("POST /sql    {sql:}    json",
+         lambda: http_requests.post(paths["sql"],     json={"sql": sql_fmt},   headers=json_h, timeout=45)),
+        ("GET  /sql    ?query=   param",
+         lambda: http_requests.get(paths["sql"],      params={"query": sql_fmt}, headers=auth_h, timeout=45)),
+
+        # ── Root / raw ClickHouse HTTP strategies ─────────────────────────
+        ("POST / body  text/plain",
+         lambda: http_requests.post(paths["root"],    data=sql_fmt.encode(),   headers=text_h, timeout=45)),
+        ("POST / ?query= param",
+         lambda: http_requests.post(paths["root"],    params={"query": sql_fmt}, headers=auth_h, timeout=45)),
+        ("GET  / ?query= param",
+         lambda: http_requests.get(paths["root"],     params={"query": sql_fmt}, headers=auth_h, timeout=45)),
+        ("POST / X-ClickHouse-Format header",
+         lambda: http_requests.post(paths["root"],    data=sql.strip().encode(),
+                                    headers={**text_h, "X-ClickHouse-Format": "JSONCompact"}, timeout=45)),
+    ]
+
+
 def run_clickhouse_query(sql: str) -> str:
     """
-    Execute a read-only SELECT/WITH against the ClickHouse HTTP API.
+    Execute a read-only SELECT/WITH against the ClickHouse API.
 
-    Tries four auth/transport strategies in order. On failure always returns
-    a detailed error string — NEVER raises — so Claude can relay it to the user.
+    Works with both:
+      • Raw ClickHouse HTTP interface  (port 8123/8443)
+      • FastAPI proxy wrapper          (e.g. clickhouse-api-*.onrender.com)
 
-    Strategies:
-      1. POST body  + Bearer token   (ClickHouse Cloud / most proxies)
-      2. POST ?query + Bearer token  (original AI4Looker style)
-      3. GET  ?query + Bearer token  (some self-hosted)
-      4. POST body  + X-ClickHouse-Format header (bare ClickHouse HTTP)
+    Tries 13 strategies across multiple paths and request formats.
+    NEVER raises — always returns a string so Claude can relay errors to the user.
     """
-    api_url   = (os.getenv("CLICKHOUSE_API_URL") or "").rstrip("/")
+    base_url  = (os.getenv("CLICKHOUSE_API_URL") or "").rstrip("/")
     api_token = os.getenv("CLICKHOUSE_API_TOKEN") or ""
 
-    if not api_url:
+    if not base_url:
         return (
             "ERROR: CLICKHOUSE_API_URL is not set in .env.\n"
             "Please add it and restart the server."
@@ -145,83 +245,52 @@ def run_clickhouse_query(sql: str) -> str:
     if not (stripped.startswith("SELECT") or stripped.startswith("WITH")):
         return "ERROR: Only SELECT/WITH queries are permitted (no DDL/DML)."
 
-    sql_fmt          = sql.strip() + " FORMAT JSONCompact"
-    bearer_headers   = {"Authorization": f"Bearer {api_token}", "Content-Type": "text/plain"}
-    errors           = []
+    errors = []
 
-    # Strategy 1: POST body (most common for ClickHouse Cloud / proxied)
-    try:
-        print(f"  🔌 CH S1: POST body to {api_url}")
-        r = http_requests.post(api_url, data=sql_fmt.encode(), headers=bearer_headers, timeout=30)
-        print(f"  📡 CH S1 status: {r.status_code}")
-        if r.status_code not in (404, 405, 403, 401):
-            return _parse_ch_response(r)
-        errors.append(f"S1 HTTP {r.status_code}: {r.text[:200]}")
-    except Exception as e:
-        errors.append(f"S1 exception: {type(e).__name__}: {e}")
+    for label, fn in _build_strategies(base_url, api_token, sql):
+        try:
+            print(f"  🔌 Trying: {label}")
+            r = fn()
+            print(f"  📡 Status: {r.status_code}  body[:80]: {r.text[:80]}")
 
-    # Strategy 2: POST ?query= param
-    try:
-        print(f"  🔌 CH S2: POST ?query=")
-        r = http_requests.post(
-            api_url,
-            params={"query": sql_fmt},
-            headers={"Authorization": f"Bearer {api_token}"},
-            timeout=30,
-        )
-        print(f"  📡 CH S2 status: {r.status_code}")
-        if r.status_code not in (404, 405, 403, 401):
-            return _parse_ch_response(r)
-        errors.append(f"S2 HTTP {r.status_code}: {r.text[:200]}")
-    except Exception as e:
-        errors.append(f"S2 exception: {type(e).__name__}: {e}")
+            # Skip health-check responses
+            if r.status_code == 200 and _is_health_response(r):
+                errors.append(f"{label} → 200 but health-check response (no 'meta' key)")
+                continue
 
-    # Strategy 3: GET ?query= param
-    try:
-        print(f"  🔌 CH S3: GET ?query=")
-        r = http_requests.get(
-            api_url,
-            params={"query": sql_fmt},
-            headers={"Authorization": f"Bearer {api_token}"},
-            timeout=30,
-        )
-        print(f"  📡 CH S3 status: {r.status_code}")
-        if r.status_code not in (404, 405, 403, 401):
-            return _parse_ch_response(r)
-        errors.append(f"S3 HTTP {r.status_code}: {r.text[:200]}")
-    except Exception as e:
-        errors.append(f"S3 exception: {type(e).__name__}: {e}")
+            if r.status_code in (404, 405, 422):
+                errors.append(f"{label} → HTTP {r.status_code} (wrong path/method)")
+                continue
 
-    # Strategy 4: POST body with X-ClickHouse-Format header
-    try:
-        print(f"  🔌 CH S4: POST body + X-ClickHouse-Format header")
-        r = http_requests.post(
-            api_url,
-            data=sql.strip().encode(),
-            headers={
-                "Authorization":       f"Bearer {api_token}",
-                "Content-Type":        "text/plain",
-                "X-ClickHouse-Format": "JSONCompact",
-            },
-            timeout=30,
-        )
-        print(f"  📡 CH S4 status: {r.status_code}")
-        if r.status_code < 400:
-            return _parse_ch_response(r)
-        errors.append(f"S4 HTTP {r.status_code}: {r.text[:200]}")
-    except Exception as e:
-        errors.append(f"S4 exception: {type(e).__name__}: {e}")
+            if r.status_code in (401, 403):
+                errors.append(f"{label} → HTTP {r.status_code} (auth failure): {r.text[:120]}")
+                continue
 
-    # All strategies failed — return a rich error message Claude can report
-    error_summary = " | ".join(errors)
-    print(f"  ❌ All CH strategies failed: {error_summary}")
+            result = _parse_ch_response(r)
+            if result is None:
+                errors.append(f"{label} → 200 but health-check body")
+                continue
+
+            print(f"  ✅ Success via: {label}")
+            return result
+
+        except http_requests.exceptions.Timeout:
+            errors.append(f"{label} → Timeout (>45s)")
+        except Exception as e:
+            errors.append(f"{label} → {type(e).__name__}: {str(e)[:120]}")
+
+    # All strategies failed
+    print(f"  ❌ All strategies failed ({len(errors)} attempts)")
     return (
-        f"DATABASE CONNECTION FAILED.\n\n"
-        f"URL tried: {api_url}\n"
-        f"All four connection strategies failed:\n"
+        "DATABASE CONNECTION FAILED.\n\n"
+        f"Base URL: {base_url}\n"
+        f"Tried {len(errors)} strategies:\n"
         + "\n".join(f"  • {e}" for e in errors)
-        + "\n\nPlease verify CLICKHOUSE_API_URL and CLICKHOUSE_API_TOKEN in your .env file, "
-        "then open /debug/clickhouse in your browser for a detailed diagnostic."
+        + "\n\nOpen /debug/clickhouse in your browser for a full diagnostic.\n"
+        "Common fixes:\n"
+        "  1. Verify CLICKHOUSE_API_URL points to the proxy base URL\n"
+        "  2. Check CLICKHOUSE_API_TOKEN is correct\n"
+        "  3. Ask your proxy admin what endpoint accepts SQL queries"
     )
 
 
@@ -765,62 +834,70 @@ def root():
 @app.get("/debug/clickhouse")
 def debug_clickhouse():
     """
-    Connectivity diagnostic — tests all 4 strategies.
+    Connectivity diagnostic — tests all 13 path+method strategies.
     Open in browser: http://localhost:8000/debug/clickhouse
 
-    Returns which strategies work, HTTP status codes, and a recommendation.
-    This is the FIRST thing to check when Claude responds with a connection error.
+    This is the FIRST thing to check when chat answers with a DB error.
+
+    Specifically handles FastAPI proxy wrappers (like clickhouse-api-*.onrender.com)
+    where the root GET / returns a health-check JSON instead of query results.
     """
-    api_url   = os.getenv("CLICKHOUSE_API_URL", "")
-    api_token = os.getenv("CLICKHOUSE_API_TOKEN", "")
+    base_url  = (os.getenv("CLICKHOUSE_API_URL") or "").rstrip("/")
+    api_token = os.getenv("CLICKHOUSE_API_TOKEN") or ""
 
     config = {
-        "CLICKHOUSE_API_URL":   api_url   or "❌ NOT SET",
+        "CLICKHOUSE_API_URL":   base_url  or "❌ NOT SET",
         "CLICKHOUSE_API_TOKEN": f"✅ set ({len(api_token)} chars)" if api_token else "❌ NOT SET",
     }
 
-    if not api_url or not api_token:
+    if not base_url or not api_token:
         return {
             "status":  "MISCONFIGURED",
             "config":  config,
             "message": "Set CLICKHOUSE_API_URL and CLICKHOUSE_API_TOKEN in .env, then restart.",
         }
 
-    test_sql = "SELECT 1 AS ping FORMAT JSONCompact"
+    test_sql = "SELECT 1 AS ping"
     results  = {}
+    working  = []
 
-    def _try(label, fn):
+    for label, fn in _build_strategies(base_url, api_token, test_sql):
         try:
             r = fn()
-            results[label] = {"http_status": r.status_code, "body_preview": r.text[:300]}
+            is_health = _is_health_response(r)
+            results[label] = {
+                "http_status":   r.status_code,
+                "body_preview":  r.text[:300],
+                "is_health_check": is_health,
+                "usable":        r.status_code == 200 and not is_health,
+            }
+            if results[label]["usable"]:
+                working.append(label)
         except Exception as e:
             results[label] = {"error": f"{type(e).__name__}: {e}"}
 
-    _try("S1_POST_body",       lambda: http_requests.post(
-        api_url, data=test_sql.encode(),
-        headers={"Authorization": f"Bearer {api_token}", "Content-Type": "text/plain"}, timeout=10))
-    _try("S2_POST_query_param", lambda: http_requests.post(
-        api_url, params={"query": test_sql},
-        headers={"Authorization": f"Bearer {api_token}"}, timeout=10))
-    _try("S3_GET_query_param",  lambda: http_requests.get(
-        api_url, params={"query": test_sql},
-        headers={"Authorization": f"Bearer {api_token}"}, timeout=10))
-    _try("S4_POST_xheader",     lambda: http_requests.post(
-        api_url, data="SELECT 1 AS ping".encode(),
-        headers={"Authorization": f"Bearer {api_token}", "Content-Type": "text/plain",
-                 "X-ClickHouse-Format": "JSONCompact"}, timeout=10))
-
-    working = [k for k, v in results.items()
-               if isinstance(v, dict) and "http_status" in v and v["http_status"] < 400]
+    note = (
+        "NOTE: Some strategies returned HTTP 200 but with a proxy health-check body "
+        "({\"status\":\"ok\"}) instead of query results. These are marked is_health_check=true "
+        "and are NOT usable for queries."
+    ) if any(
+        isinstance(v, dict) and v.get("is_health_check") for v in results.values()
+    ) else None
 
     return {
-        "status":              "OK" if working else "FAILED",
-        "config":              config,
-        "working_strategies":  working,
-        "all_results":         results,
+        "status":             "OK" if working else "FAILED",
+        "config":             config,
+        "working_strategies": working,
+        "note":               note,
+        "all_results":        results,
         "recommendation": (
-            f"✅ Connection works via: {working[0]}. Chat should work." if working
-            else "❌ No strategy worked. Check URL, token, firewall/VPN, and ClickHouse logs."
+            f"✅ Queries will use: {working[0]}. Chat should work now." if working
+            else (
+                "❌ No strategy returned real ClickHouse data.\n"
+                "If your proxy is a FastAPI app, find out what path accepts SQL "
+                "(e.g. POST /query with JSON body {\"sql\":\"...\"}) and update CLICKHOUSE_API_URL "
+                "to include that path, or share the proxy source code so the connector can be tuned."
+            )
         ),
     }
 
