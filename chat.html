@@ -7,28 +7,27 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
   <style>
-    /* ── Reset & Base ─────────────────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --navy:        #0D1B3E;
-      --navy-dark:   #080F22;
-      --blue:        #1565C0;
-      --blue-light:  #E8F0FE;
-      --accent:      #1E88E5;
-      --green:       #2E7D32;
-      --red:         #B71C1C;
-      --amber:       #F59E0B;
-      --white:       #FFFFFF;
-      --bg:          #F4F6FA;
-      --card:        #FFFFFF;
-      --border:      #E2E8F0;
-      --txt-main:    #1E293B;
-      --txt-mid:     #475569;
-      --txt-dim:     #94A3B8;
-      --radius:      12px;
-      --shadow:      0 2px 16px rgba(13,27,62,0.08);
-      --sidebar-w:   260px;
+      --navy:       #0D1B3E;
+      --navy-dark:  #080F22;
+      --blue:       #1565C0;
+      --blue-lt:    #E8F0FE;
+      --accent:     #1E88E5;
+      --green:      #2E7D32;
+      --red:        #B71C1C;
+      --amber:      #F59E0B;
+      --white:      #FFFFFF;
+      --bg:         #F4F6FA;
+      --card:       #FFFFFF;
+      --border:     #E2E8F0;
+      --txt-main:   #1E293B;
+      --txt-mid:    #475569;
+      --txt-dim:    #94A3B8;
+      --radius:     12px;
+      --shadow:     0 2px 16px rgba(13,27,62,.08);
+      --sidebar-w:  260px;
     }
 
     body {
@@ -41,7 +40,7 @@
       overflow: hidden;
     }
 
-    /* ── Topbar ───────────────────────────────────────────────────────────── */
+    /* ── Topbar ─────────────────────────────────────────────────────────── */
     .topbar {
       background: var(--navy);
       color: var(--white);
@@ -51,548 +50,349 @@
       padding: 0 24px;
       height: 56px;
       flex-shrink: 0;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      box-shadow: 0 2px 8px rgba(0,0,0,.3);
       z-index: 100;
     }
-    .topbar-brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
+    .topbar-brand { display: flex; align-items: center; gap: 10px; }
     .topbar-logo {
-      width: 30px;
-      height: 30px;
+      width: 32px; height: 32px;
       background: linear-gradient(135deg, var(--accent), #42A5F5);
-      border-radius: 7px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 700;
-      font-size: 13px;
-      letter-spacing: -0.5px;
-      color: white;
-    }
-    .topbar-title {
-      font-size: 15px;
-      font-weight: 600;
-      letter-spacing: -0.2px;
-    }
-    .topbar-sub {
-      font-size: 11px;
-      color: #90A4AE;
-      margin-left: 2px;
-    }
-    .topbar-actions {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-
-    /* Export buttons */
-    .export-btn {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 7px 14px;
       border-radius: 8px;
-      border: none;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.15s;
-      font-family: inherit;
-      letter-spacing: 0.2px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 13px; color: white; letter-spacing: -.5px;
     }
-    .export-btn:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
+    .topbar-title { font-size: 15px; font-weight: 600; letter-spacing: -.2px; }
+    .topbar-sub   { font-size: 11px; color: #90A4AE; margin-top: 1px; }
+    .topbar-actions { display: flex; gap: 8px; align-items: center; }
+
+    .export-btn {
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 14px; border-radius: 8px; border: none;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+      transition: all .15s; font-family: inherit; letter-spacing: .2px;
     }
-    .btn-pdf {
-      background: #C62828;
-      color: white;
-    }
-    .btn-pdf:hover:not(:disabled) {
-      background: #B71C1C;
-    }
-    .btn-pptx {
-      background: #D84315;
-      color: white;
-    }
-    .btn-pptx:hover:not(:disabled) {
-      background: #BF360C;
-    }
-    .export-btn svg {
-      width: 14px;
-      height: 14px;
-      flex-shrink: 0;
-    }
+    .export-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-pdf  { background: #C62828; color: white; }
+    .btn-pdf:hover:not(:disabled)  { background: #B71C1C; }
+    .btn-pptx { background: #D84315; color: white; }
+    .btn-pptx:hover:not(:disabled) { background: #BF360C; }
+    .export-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
 
     .new-chat-btn {
-      background: rgba(255,255,255,0.1);
-      color: white;
-      border: 1px solid rgba(255,255,255,0.2);
-      padding: 7px 14px;
-      border-radius: 8px;
-      font-size: 12px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.15s;
-      font-family: inherit;
+      background: rgba(255,255,255,.1); color: white;
+      border: 1px solid rgba(255,255,255,.2);
+      padding: 7px 14px; border-radius: 8px;
+      font-size: 12px; font-weight: 500; cursor: pointer;
+      transition: background .15s; font-family: inherit;
     }
-    .new-chat-btn:hover {
-      background: rgba(255,255,255,0.18);
-    }
+    .new-chat-btn:hover { background: rgba(255,255,255,.18); }
 
-    /* ── Body layout ──────────────────────────────────────────────────────── */
-    .body-wrap {
-      flex: 1;
-      display: flex;
-      overflow: hidden;
+    .debug-link {
+      color: #90A4AE; font-size: 11px; text-decoration: none;
+      padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,.12);
+      transition: all .15s;
     }
+    .debug-link:hover { color: white; border-color: rgba(255,255,255,.3); }
 
-    /* ── Sidebar ──────────────────────────────────────────────────────────── */
+    /* ── Body layout ─────────────────────────────────────────────────────── */
+    .body-wrap { flex: 1; display: flex; overflow: hidden; }
+
+    /* ── Sidebar ─────────────────────────────────────────────────────────── */
     .sidebar {
       width: var(--sidebar-w);
       background: var(--navy-dark);
       color: white;
-      display: flex;
-      flex-direction: column;
-      flex-shrink: 0;
-      overflow-y: auto;
-      padding: 16px 12px;
-      gap: 6px;
+      display: flex; flex-direction: column;
+      flex-shrink: 0; overflow-y: auto;
+      padding: 16px 12px; gap: 6px;
     }
     .sidebar-label {
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.8px;
-      text-transform: uppercase;
-      color: #546E7A;
+      font-size: 10px; font-weight: 600; letter-spacing: .8px;
+      text-transform: uppercase; color: #546E7A;
       padding: 6px 8px 4px;
     }
     .suggestion-chip {
-      padding: 9px 12px;
-      border-radius: 8px;
-      border: 1px solid rgba(255,255,255,0.07);
-      background: rgba(255,255,255,0.04);
-      color: #B0BEC5;
-      font-size: 11.5px;
-      line-height: 1.4;
-      cursor: pointer;
-      transition: all 0.15s;
+      padding: 9px 12px; border-radius: 8px;
+      border: 1px solid rgba(255,255,255,.07);
+      background: rgba(255,255,255,.04);
+      color: #B0BEC5; font-size: 11.5px; line-height: 1.45;
+      cursor: pointer; transition: all .15s;
     }
     .suggestion-chip:hover {
-      background: rgba(30,136,229,0.18);
-      border-color: rgba(30,136,229,0.35);
-      color: white;
+      background: rgba(30,136,229,.18);
+      border-color: rgba(30,136,229,.35); color: white;
     }
-    .sidebar-divider {
-      border: none;
-      border-top: 1px solid rgba(255,255,255,0.06);
-      margin: 6px 0;
-    }
+    .sidebar-divider { border: none; border-top: 1px solid rgba(255,255,255,.06); margin: 6px 0; }
 
-    /* ── Chat pane ────────────────────────────────────────────────────────── */
+    /* ── Connection status badge ─────────────────────────────────────────── */
+    .conn-badge {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 12px; border-radius: 8px; font-size: 11px;
+      border: 1px solid rgba(255,255,255,.08);
+      margin-top: auto; cursor: pointer;
+    }
+    .conn-badge .dot {
+      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+      background: var(--txt-dim);
+    }
+    .conn-badge.ok   .dot { background: #4CAF50; }
+    .conn-badge.fail .dot { background: var(--red); }
+    .conn-badge.checking .dot {
+      background: var(--amber);
+      animation: pulse .8s infinite alternate;
+    }
+    @keyframes pulse { to { opacity: .3; } }
+
+    /* ── Chat pane ───────────────────────────────────────────────────────── */
     .chat-pane {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-      min-width: 0;
+      flex: 1; display: flex; flex-direction: column; overflow: hidden;
     }
-
     .messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 24px 28px 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
+      flex: 1; overflow-y: auto;
+      padding: 24px 28px; display: flex;
+      flex-direction: column; gap: 20px;
       scroll-behavior: smooth;
     }
+    .messages::-webkit-scrollbar { width: 5px; }
+    .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
-    /* Welcome state */
-    .welcome {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-      gap: 14px;
-      opacity: 0.7;
+    /* ── Welcome screen ──────────────────────────────────────────────────── */
+    #welcome {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      height: 100%; gap: 18px; text-align: center;
     }
     .welcome-icon {
-      width: 56px;
-      height: 56px;
-      border-radius: 14px;
-      background: var(--blue-light);
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      width: 64px; height: 64px;
+      background: linear-gradient(135deg, var(--navy), var(--accent));
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: var(--shadow);
     }
-    .welcome-icon svg { width: 28px; height: 28px; color: var(--blue); }
-    .welcome h2 { font-size: 18px; font-weight: 600; color: var(--txt-main); }
-    .welcome p  { font-size: 13px; color: var(--txt-mid); text-align: center; max-width: 360px; line-height: 1.6; }
+    .welcome-icon svg { width: 32px; height: 32px; color: white; }
+    #welcome h2 { font-size: 22px; font-weight: 700; color: var(--navy); }
+    #welcome p  { font-size: 13.5px; color: var(--txt-mid); max-width: 420px; line-height: 1.6; }
 
-    /* Message bubbles */
-    .msg {
-      display: flex;
-      gap: 10px;
-      max-width: 860px;
-      align-self: flex-start;
-      width: 100%;
-    }
-    .msg.user {
-      align-self: flex-end;
-      flex-direction: row-reverse;
-    }
+    /* ── Message bubbles ─────────────────────────────────────────────────── */
+    .msg { display: flex; gap: 12px; max-width: 860px; width: 100%; }
+    .msg.user { flex-direction: row-reverse; align-self: flex-end; }
+    .msg.assistant { align-self: flex-start; }
+
     .msg-avatar {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      flex-shrink: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 13px;
-      font-weight: 700;
-      margin-top: 2px;
+      width: 34px; height: 34px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700; flex-shrink: 0;
     }
-    .msg.user .msg-avatar {
-      background: var(--blue);
-      color: white;
-    }
-    .msg.assistant .msg-avatar {
-      background: var(--navy);
-      color: white;
-    }
-    .msg-body {
-      flex: 1;
-      min-width: 0;
-    }
+    .msg.user .msg-avatar      { background: var(--navy); color: white; }
+    .msg.assistant .msg-avatar { background: linear-gradient(135deg,var(--accent),#42A5F5); color: white; }
+
+    .msg-body { display: flex; flex-direction: column; gap: 4px; max-width: calc(100% - 46px); }
+    .msg.user .msg-body { align-items: flex-end; }
+
     .msg-bubble {
-      padding: 12px 16px;
-      border-radius: 12px;
-      font-size: 13.5px;
-      line-height: 1.65;
+      padding: 12px 16px; border-radius: var(--radius);
+      font-size: 13.5px; line-height: 1.6;
+      box-shadow: 0 1px 4px rgba(0,0,0,.06);
     }
     .msg.user .msg-bubble {
-      background: var(--blue);
-      color: white;
-      border-radius: 12px 4px 12px 12px;
+      background: var(--navy); color: white;
+      border-radius: var(--radius) 4px var(--radius) var(--radius);
     }
     .msg.assistant .msg-bubble {
-      background: var(--card);
+      background: var(--card); color: var(--txt-main);
       border: 1px solid var(--border);
-      color: var(--txt-main);
-      border-radius: 4px 12px 12px 12px;
-      box-shadow: var(--shadow);
+      border-radius: 4px var(--radius) var(--radius) var(--radius);
     }
-    .msg-time {
-      font-size: 10px;
-      color: var(--txt-dim);
-      margin-top: 4px;
-      padding: 0 4px;
-    }
-    .msg.user .msg-time { text-align: right; }
+    .msg-time { font-size: 10.5px; color: var(--txt-dim); padding: 0 4px; }
 
-    /* Markdown inside assistant bubble */
-    .chat-md h1, .chat-md h2 { font-size: 14px; font-weight: 600; margin: 12px 0 4px; color: var(--navy); }
-    .chat-md h3 { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--txt-mid); margin: 10px 0 3px; }
-    .chat-md h1:first-child, .chat-md h2:first-child, .chat-md h3:first-child { margin-top: 0; }
-    .chat-md p { margin: 0 0 8px; }
+    /* Markdown inside assistant bubbles */
+    .chat-md { overflow-x: auto; }
+    .chat-md p  { margin-bottom: 8px; }
     .chat-md p:last-child { margin-bottom: 0; }
-    .chat-md ul, .chat-md ol { margin: 4px 0 8px 0; padding-left: 18px; }
+    .chat-md h2 { font-size: 14px; font-weight: 700; color: var(--navy);
+                  margin: 14px 0 6px; border-bottom: 2px solid var(--blue-lt); padding-bottom: 4px; }
+    .chat-md h3 { font-size: 13px; font-weight: 600; color: var(--blue); margin: 10px 0 4px; }
+    .chat-md ul { padding-left: 18px; margin-bottom: 8px; }
     .chat-md li { margin-bottom: 4px; }
-    .chat-md strong { font-weight: 600; color: var(--navy); }
-    .chat-md code {
-      font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
-      font-size: 11.5px;
-      background: rgba(13,27,62,0.06);
-      border: 1px solid var(--border);
-      padding: 1px 5px;
-      border-radius: 4px;
+    .chat-md strong { font-weight: 600; }
+    .chat-md code  {
+      background: #F1F5F9; padding: 2px 5px; border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace; font-size: 12px;
+      color: #0D1B3E;
     }
     .chat-md pre {
-      background: #F8FAFC;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
-      overflow-x: auto;
-      margin: 8px 0;
+      background: #0D1B3E; color: #E2E8F0; padding: 14px;
+      border-radius: 8px; overflow-x: auto; margin: 10px 0;
+      font-size: 12px; line-height: 1.6;
     }
-    .chat-md pre code { background: none; border: none; padding: 0; font-size: 11.5px; }
+    .chat-md pre code { background: none; color: inherit; padding: 0; }
     .chat-md table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-      margin: 8px 0;
+      border-collapse: collapse; font-size: 12px; margin: 10px 0;
+      width: 100%; min-width: 360px;
     }
     .chat-md th {
-      background: var(--navy);
-      color: white;
-      font-weight: 600;
-      text-align: left;
-      padding: 6px 10px;
+      background: var(--navy); color: white;
+      padding: 8px 12px; text-align: left; font-weight: 600;
     }
-    .chat-md td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
-    .chat-md tr:nth-child(even) td { background: var(--blue-light); }
-    .chat-md blockquote {
-      border-left: 3px solid var(--accent);
-      background: var(--blue-light);
-      padding: 8px 12px;
-      border-radius: 0 6px 6px 0;
-      margin: 6px 0;
-      font-size: 12.5px;
-      color: var(--txt-mid);
-    }
-    .chat-md blockquote p { margin: 0; }
-    .chat-md hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+    .chat-md td  { padding: 7px 12px; border-bottom: 1px solid var(--border); }
+    .chat-md tr:nth-child(even) td { background: #F8FAFC; }
 
-    /* Typing indicator */
-    .typing-bubble {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 4px 12px 12px 12px;
-      padding: 14px 18px;
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      box-shadow: var(--shadow);
+    /* ── Typing indicator ────────────────────────────────────────────────── */
+    .typing-indicator { display: flex; gap: 5px; padding: 12px 16px; align-items: center; }
+    .typing-dot {
+      width: 7px; height: 7px; border-radius: 50%; background: var(--txt-dim);
+      animation: bounce .9s infinite;
     }
-    .dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: var(--accent);
-      animation: bounce 1.2s infinite;
-    }
-    .dot:nth-child(2) { animation-delay: 0.2s; }
-    .dot:nth-child(3) { animation-delay: 0.4s; }
+    .typing-dot:nth-child(2) { animation-delay: .15s; }
+    .typing-dot:nth-child(3) { animation-delay: .3s; }
     @keyframes bounce {
-      0%, 80%, 100% { transform: scale(0.7); opacity: 0.5; }
-      40%            { transform: scale(1.1); opacity: 1; }
+      0%,100% { transform: translateY(0); }
+      50%      { transform: translateY(-6px); }
     }
 
-    /* ── Input area ───────────────────────────────────────────────────────── */
-    .input-wrap {
-      padding: 14px 28px 20px;
+    /* ── Input area ──────────────────────────────────────────────────────── */
+    .input-area {
+      padding: 16px 28px 20px;
       background: var(--bg);
       border-top: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 10px;
       flex-shrink: 0;
     }
     .input-row {
-      display: flex;
-      gap: 10px;
-      align-items: flex-end;
-      background: var(--card);
-      border: 1.5px solid var(--border);
-      border-radius: 14px;
-      padding: 10px 12px 10px 16px;
-      box-shadow: var(--shadow);
-      transition: border-color 0.15s;
+      display: flex; gap: 10px; align-items: flex-end;
     }
-    .input-row:focus-within {
-      border-color: var(--accent);
-    }
-    .input-row textarea {
+    #chat-input {
       flex: 1;
-      border: none;
-      outline: none;
-      background: transparent;
-      font-family: inherit;
-      font-size: 13.5px;
-      color: var(--txt-main);
-      resize: none;
-      min-height: 22px;
-      max-height: 140px;
-      line-height: 1.55;
+      padding: 12px 16px; border-radius: var(--radius);
+      border: 1.5px solid var(--border); background: var(--card);
+      font-family: inherit; font-size: 13.5px; color: var(--txt-main);
+      resize: none; max-height: 140px; min-height: 48px;
+      transition: border-color .15s; outline: none; line-height: 1.5;
     }
-    .input-row textarea::placeholder { color: var(--txt-dim); }
-    .send-btn {
-      width: 36px;
-      height: 36px;
-      border-radius: 9px;
-      background: var(--blue);
-      border: none;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.15s, transform 0.1s;
-      flex-shrink: 0;
+    #chat-input:focus { border-color: var(--accent); }
+    #send-btn {
+      width: 44px; height: 44px; border-radius: 10px;
+      background: var(--navy); color: white; border: none;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: background .15s;
     }
-    .send-btn:hover:not(:disabled) {
-      background: var(--navy);
-      transform: scale(1.05);
-    }
-    .send-btn:disabled {
-      background: var(--txt-dim);
-      cursor: not-allowed;
-      transform: none;
-    }
-    .send-btn svg {
-      width: 16px;
-      height: 16px;
-      color: white;
-    }
-    .input-hint {
-      font-size: 10.5px;
-      color: var(--txt-dim);
-      margin-top: 7px;
-      text-align: center;
-    }
+    #send-btn:hover:not(:disabled) { background: var(--blue); }
+    #send-btn:disabled { opacity: .4; cursor: not-allowed; }
+    #send-btn svg { width: 18px; height: 18px; }
 
-    /* ── Status toast ─────────────────────────────────────────────────────── */
-    .toast {
-      position: fixed;
-      bottom: 28px;
-      right: 28px;
-      background: var(--navy);
-      color: white;
-      padding: 10px 18px;
-      border-radius: 10px;
-      font-size: 12.5px;
-      font-weight: 500;
-      opacity: 0;
-      transform: translateY(10px);
-      transition: all 0.25s;
-      pointer-events: none;
-      z-index: 9999;
-      max-width: 280px;
-    }
-    .toast.show {
-      opacity: 1;
-      transform: translateY(0);
-    }
-    .toast.error { background: var(--red); }
-    .toast.success { background: var(--green); }
+    .input-hint { font-size: 11px; color: var(--txt-dim); text-align: right; }
 
-    /* Scrollbar */
-    .messages::-webkit-scrollbar { width: 5px; }
-    .messages::-webkit-scrollbar-track { background: transparent; }
-    .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    /* ── Toast ───────────────────────────────────────────────────────────── */
+    #toast {
+      position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(20px);
+      background: #1E293B; color: white; padding: 10px 20px;
+      border-radius: 10px; font-size: 13px; font-weight: 500;
+      opacity: 0; transition: all .25s; pointer-events: none; z-index: 999;
+      box-shadow: 0 4px 20px rgba(0,0,0,.25);
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    #toast.error { background: var(--red); }
+    #toast.success { background: var(--green); }
   </style>
 </head>
 <body>
 
-<!-- ── Topbar ───────────────────────────────────────────────────────────────── -->
-<div class="topbar">
+<!-- ── Topbar ─────────────────────────────────────────────────────────────── -->
+<header class="topbar">
   <div class="topbar-brand">
     <div class="topbar-logo">PG</div>
     <div>
       <div class="topbar-title">PipeGen Chat</div>
-      <div class="topbar-sub">Pipeline Intelligence · Live ClickHouse</div>
+      <div class="topbar-sub">Pipeline Intelligence · Kore.ai</div>
     </div>
   </div>
   <div class="topbar-actions">
-    <button class="export-btn btn-pdf" id="exportPdfBtn" onclick="exportReport('pdf')" disabled title="Export conversation as PDF report">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <a href="/debug/clickhouse" target="_blank" class="debug-link" title="Test ClickHouse connectivity">
+      🔌 Debug DB
+    </a>
+    <button class="export-btn btn-pdf" id="btn-pdf" disabled onclick="doExport('pdf')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-        <polyline points="14,2 14,8 20,8"/>
-        <line x1="16" y1="13" x2="8" y2="13"/>
-        <line x1="16" y1="17" x2="8" y2="17"/>
-        <polyline points="10,9 9,9 8,9"/>
+        <polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/>
+        <line x1="9" y1="17" x2="15" y2="17"/><line x1="9" y1="9"  x2="11" y2="9"/>
       </svg>
       Export PDF
     </button>
-    <button class="export-btn btn-pptx" id="exportPptxBtn" onclick="exportReport('pptx')" disabled title="Export conversation as PPTX deck">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-        <line x1="8" y1="21" x2="16" y2="21"/>
+    <button class="export-btn btn-pptx" id="btn-pptx" disabled onclick="doExport('pptx')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+        <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/>
         <line x1="12" y1="17" x2="12" y2="21"/>
       </svg>
       Export PPTX
     </button>
     <button class="new-chat-btn" onclick="newChat()">+ New Chat</button>
   </div>
-</div>
+</header>
 
-<!-- ── Body ─────────────────────────────────────────────────────────────────── -->
+<!-- ── Body ───────────────────────────────────────────────────────────────── -->
 <div class="body-wrap">
 
-  <!-- Sidebar with suggestions -->
+  <!-- Sidebar -->
   <aside class="sidebar">
     <div class="sidebar-label">Quick Questions</div>
 
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      What's the total active pipeline value for FY27?
-    </div>
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      Which region has the highest pipeline this FY?
-    </div>
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      Show me the top 10 deals by value with owners
-    </div>
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      Which AEs have the most stalled deals?
-    </div>
+    <div class="sidebar-label" style="margin-top:6px;">📊 Pipeline</div>
+    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">How many deals are in each stage right now?</button>
+    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">What's the total active pipeline value for FY27?</button>
+    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Show me the top 10 deals by value with their AEs</button>
+    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Pipeline breakdown by region</button>
 
-    <hr class="sidebar-divider" />
-    <div class="sidebar-label">Win / Loss</div>
+    <hr class="sidebar-divider"/>
 
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      What are our most common lost deal reasons?
-    </div>
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      Which competitors are mentioned most in lost deals?
-    </div>
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      What's our win rate by deal source?
-    </div>
+    <div class="sidebar-label">👥 People & Accounts</div>
+    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Which AEs have the most stalled deals?</button>
+    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">BANT qualification rate across active pipeline</button>
+    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Show deals by account priority (P1-P4 vs others)</button>
 
-    <hr class="sidebar-divider" />
-    <div class="sidebar-label">Quality & Risk</div>
+    <hr class="sidebar-divider"/>
 
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      What % of active deals are BANT qualified?
-    </div>
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      Which deals are closing in the next 30 days but still in early stages?
-    </div>
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      Show pipeline by industry at 20%+ stage
-    </div>
+    <div class="sidebar-label">📉 Win / Loss</div>
+    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Win rate by deal source for FY27</button>
+    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Recent lost deals and their primary loss reasons</button>
+    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Which competitors appear most in lost deals?</button>
 
-    <hr class="sidebar-divider" />
-    <div class="sidebar-label">Funnel</div>
+    <hr class="sidebar-divider"/>
 
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      How many deals are in each stage right now?
-    </div>
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      What is the average deal size by region?
-    </div>
-    <div class="suggestion-chip" onclick="sendSuggestion(this)">
-      Show deals entered in each FY27 month so far
+    <div class="sidebar-label">🏭 Industry</div>
+    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Pipeline breakdown by industry</button>
+    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Financial Services deals in active pipeline</button>
+
+    <!-- Connection status — bottom of sidebar -->
+    <div id="conn-badge" class="conn-badge checking" style="margin-top:auto;"
+         onclick="checkConn()" title="Click to recheck ClickHouse connection">
+      <span class="dot"></span>
+      <span id="conn-label">Checking DB…</span>
     </div>
   </aside>
 
   <!-- Chat pane -->
-  <div class="chat-pane">
+  <main class="chat-pane">
     <div class="messages" id="messages">
-      <div class="welcome" id="welcome">
+      <div id="welcome">
         <div class="welcome-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
           </svg>
         </div>
         <h2>PipeGen Chat</h2>
-        <p>Ask anything about your pipeline — deals, AEs, regions, win/loss, BANT, funnel velocity and more. Connected live to ClickHouse.</p>
+        <p>Ask anything about your pipeline — deals by stage, AE performance, win/loss
+           analysis, BANT rates, regional breakdowns, and more.<br>
+           Data is fetched live from ClickHouse.</p>
       </div>
     </div>
 
-    <div class="input-wrap">
+    <div class="input-area">
       <div class="input-row">
-        <textarea
-          id="userInput"
-          placeholder="Ask about pipeline, deals, AEs, win/loss, regions…"
-          rows="1"
-          onkeydown="handleKey(event)"
-          oninput="autoResize(this)"
-        ></textarea>
-        <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="Send (Enter)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <textarea id="chat-input" rows="1"
+          placeholder="Ask about pipeline, deals, AEs, win rates…"
+          onkeydown="handleKey(event)"></textarea>
+        <button id="send-btn" onclick="send()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
             <line x1="22" y1="2" x2="11" y2="13"/>
             <polygon points="22 2 15 22 11 13 2 9 22 2"/>
           </svg>
@@ -600,77 +400,44 @@
       </div>
       <div class="input-hint">Enter to send · Shift+Enter for new line</div>
     </div>
-  </div>
+  </main>
 </div>
 
-<!-- Toast -->
-<div class="toast" id="toast"></div>
+<div id="toast"></div>
 
 <script>
-  // ── State ────────────────────────────────────────────────────────────────
-  let history = [];   // [{role, content}, ...]
+  /* ── State ──────────────────────────────────────────────────────────────── */
+  let history = [];
   let busy    = false;
 
-  // ── Marked config ────────────────────────────────────────────────────────
+  /* ── marked.js config ────────────────────────────────────────────────────── */
   marked.setOptions({ breaks: true, gfm: true });
 
-  // ── Auto-resize textarea ─────────────────────────────────────────────────
-  function autoResize(el) {
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 140) + "px";
-  }
+  /* ── Auto-resize textarea ────────────────────────────────────────────────── */
+  const input = document.getElementById("chat-input");
+  input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 140) + "px";
+  });
 
-  // ── Keyboard handler ──────────────────────────────────────────────────────
   function handleKey(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   }
 
-  // ── Suggestion chips ─────────────────────────────────────────────────────
-  function sendSuggestion(el) {
-    const q = el.textContent.trim();
-    document.getElementById("userInput").value = q;
-    sendMessage();
-  }
-
-  // ── New chat ──────────────────────────────────────────────────────────────
-  function newChat() {
-    history = [];
-    const msgs = document.getElementById("messages");
-    msgs.innerHTML = `
-      <div class="welcome" id="welcome">
-        <div class="welcome-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-          </svg>
-        </div>
-        <h2>PipeGen Chat</h2>
-        <p>Ask anything about your pipeline — deals, AEs, regions, win/loss, BANT, funnel velocity and more. Connected live to ClickHouse.</p>
-      </div>`;
-    updateExportButtons();
-  }
-
-  // ── Send message ──────────────────────────────────────────────────────────
-  async function sendMessage() {
-    const input = document.getElementById("userInput");
-    const text  = input.value.trim();
+  /* ── Send ────────────────────────────────────────────────────────────────── */
+  async function send() {
+    const text = input.value.trim();
     if (!text || busy) return;
 
-    // Hide welcome
     const welcome = document.getElementById("welcome");
     if (welcome) welcome.remove();
 
-    // Append user bubble
     appendBubble("user", text);
     history.push({ role: "user", content: text });
-
-    input.value   = "";
+    input.value = "";
     input.style.height = "auto";
     setBusy(true);
 
-    // Typing indicator
     const typingId = addTyping();
 
     try {
@@ -690,14 +457,19 @@
       updateExportButtons();
     } catch (err) {
       removeTyping(typingId);
-      appendBubble("assistant", `⚠️ Error: ${err.message}`);
-      showToast("Request failed: " + err.message, "error");
+      appendBubble("assistant", `⚠️ **Error:** ${err.message}\n\nCheck the server logs or open [/debug/clickhouse](/debug/clickhouse) to diagnose connectivity.`);
+      showToast("Error: " + err.message, "error");
     } finally {
       setBusy(false);
     }
   }
 
-  // ── Bubble helpers ────────────────────────────────────────────────────────
+  function sendSuggestion(text) {
+    input.value = text;
+    send();
+  }
+
+  /* ── Bubble helpers ──────────────────────────────────────────────────────── */
   function appendBubble(role, content) {
     const msgs = document.getElementById("messages");
     const now  = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -705,7 +477,7 @@
     const div = document.createElement("div");
     div.className = `msg ${role}`;
 
-    const avatar = role === "user" ? "You" : "AI";
+    const initials = role === "user" ? "YOU" : "AI";
     let   body;
 
     if (role === "assistant") {
@@ -717,25 +489,32 @@
     }
 
     div.innerHTML = `
-      <div class="msg-avatar">${avatar.slice(0,2).toUpperCase()}</div>
+      <div class="msg-avatar">${initials}</div>
       <div class="msg-body">${body}</div>`;
-
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
-    return div;
   }
 
+  function escapeHtml(s) {
+    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  /* ── Typing indicator ────────────────────────────────────────────────────── */
   function addTyping() {
+    const id  = "typing-" + Date.now();
     const msgs = document.getElementById("messages");
-    const id   = "typing-" + Date.now();
-    const div  = document.createElement("div");
-    div.id        = id;
+    const div = document.createElement("div");
+    div.id = id;
     div.className = "msg assistant";
     div.innerHTML = `
       <div class="msg-avatar">AI</div>
       <div class="msg-body">
-        <div class="typing-bubble">
-          <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+        <div class="msg-bubble">
+          <div class="typing-indicator">
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+          </div>
         </div>
       </div>`;
     msgs.appendChild(div);
@@ -748,50 +527,46 @@
     if (el) el.remove();
   }
 
-  function escapeHtml(s) {
-    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
-            .replace(/"/g,"&quot;").replace(/'/g,"&#039;");
-  }
-
-  // ── Busy state ────────────────────────────────────────────────────────────
+  /* ── Busy state ──────────────────────────────────────────────────────────── */
   function setBusy(state) {
     busy = state;
-    document.getElementById("sendBtn").disabled    = state;
-    document.getElementById("userInput").disabled  = state;
+    document.getElementById("send-btn").disabled  = state;
+    document.getElementById("chat-input").disabled = state;
   }
 
-  // ── Export ────────────────────────────────────────────────────────────────
   function updateExportButtons() {
-    const hasConv = history.length > 0;
-    document.getElementById("exportPdfBtn").disabled  = !hasConv;
-    document.getElementById("exportPptxBtn").disabled = !hasConv;
+    const hasChat = history.length > 0;
+    document.getElementById("btn-pdf").disabled  = !hasChat;
+    document.getElementById("btn-pptx").disabled = !hasChat;
   }
 
-  async function exportReport(format) {
-    if (busy) return;
+  /* ── Export ──────────────────────────────────────────────────────────────── */
+  async function doExport(format) {
+    if (busy || !history.length) return;
     setBusy(true);
-    showToast(`Generating ${format.toUpperCase()} report… this may take ~30s`, "");
-
-    const title = prompt("Report title:", "Pipeline Intelligence Report") || "Pipeline Intelligence Report";
+    showToast(`Generating ${format.toUpperCase()}… (this may take ~30s)`, "");
 
     try {
       const res = await fetch(`/export/${format}`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ format, conversation: history, title }),
+        body:    JSON.stringify({
+          format,
+          conversation: history,
+          title: "Pipeline Intelligence Report",
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
       const blob = await res.blob();
+      const ext  = format === "pdf" ? "pdf" : "pptx";
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
       a.href     = url;
-      a.download = title.replace(/\s+/g,"_") + "." + format;
-      document.body.appendChild(a);
+      a.download = `pipeline-report.${ext}`;
       a.click();
-      a.remove();
       URL.revokeObjectURL(url);
       showToast(`${format.toUpperCase()} downloaded!`, "success");
     } catch (err) {
@@ -801,22 +576,59 @@
     }
   }
 
-  // ── Toast ─────────────────────────────────────────────────────────────────
-  let _toastTimer = null;
-  function showToast(msg, type = "") {
-    const toast = document.getElementById("toast");
-    toast.textContent = msg;
-    toast.className   = "toast show" + (type ? " " + type : "");
-    clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(() => {
-      toast.className = "toast";
-    }, 3500);
+  /* ── New chat ────────────────────────────────────────────────────────────── */
+  function newChat() {
+    history = [];
+    const msgs = document.getElementById("messages");
+    msgs.innerHTML = `
+      <div id="welcome">
+        <div class="welcome-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+        </div>
+        <h2>PipeGen Chat</h2>
+        <p>Ask anything about your pipeline — deals by stage, AE performance, win/loss
+           analysis, BANT rates, regional breakdowns, and more.<br>
+           Data is fetched live from ClickHouse.</p>
+      </div>`;
+    updateExportButtons();
   }
 
-  // ── Focus input on load ───────────────────────────────────────────────────
-  window.addEventListener("load", () => {
-    document.getElementById("userInput").focus();
-  });
+  /* ── Toast ───────────────────────────────────────────────────────────────── */
+  let _toastTimer;
+  function showToast(msg, type = "") {
+    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.className   = "show " + type;
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { t.className = ""; }, 4000);
+  }
+
+  /* ── Connection health check ─────────────────────────────────────────────── */
+  async function checkConn() {
+    const badge = document.getElementById("conn-badge");
+    const label = document.getElementById("conn-label");
+    badge.className = "conn-badge checking";
+    label.textContent = "Checking…";
+    try {
+      const res  = await fetch("/debug/clickhouse");
+      const data = await res.json();
+      if (data.working_strategies && data.working_strategies.length > 0) {
+        badge.className  = "conn-badge ok";
+        label.textContent = "DB Connected ✓";
+      } else {
+        badge.className  = "conn-badge fail";
+        label.textContent = "DB Unreachable";
+      }
+    } catch {
+      badge.className  = "conn-badge fail";
+      label.textContent = "DB Unreachable";
+    }
+  }
+
+  /* Run connection check on load */
+  checkConn();
 </script>
 </body>
 </html>
