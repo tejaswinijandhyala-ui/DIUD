@@ -75,55 +75,138 @@ _CLAUDE_MODEL = "claude-opus-4-5"
 # ClickHouse Query Runner
 # =============================================================================
 
-def run_clickhouse_query(sql: str) -> str:
+def _parse_ch_response(resp: http_requests.Response) -> str:
     """
-    Execute a read-only SELECT/WITH query against the ClickHouse HTTP API.
-    Returns a pipe-delimited table string or an error message.
+    Parse a ClickHouse HTTP response into a readable pipe-delimited table.
+    Handles JSONCompact, JSON, and plain TSV/CSV fallbacks.
     """
-    api_url   = os.getenv("CLICKHOUSE_API_URL")
-    api_token = os.getenv("CLICKHOUSE_API_TOKEN")
+    resp.raise_for_status()
+    content_type = resp.headers.get("content-type", "")
 
-    if not api_url or not api_token:
-        return "ClickHouse not configured. Set CLICKHOUSE_API_URL and CLICKHOUSE_API_TOKEN in .env."
-
-    stripped = sql.strip().upper()
-    if not stripped.startswith("SELECT") and not stripped.startswith("WITH"):
-        return "Error: Only SELECT/WITH queries are permitted."
-
-    try:
-        resp = http_requests.post(
-            api_url,
-            params={"query": sql + " FORMAT JSONCompact"},
-            headers={"Authorization": f"Bearer {api_token}"},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
+    # ── JSONCompact / JSON ────────────────────────────────────────────────────
+    if "json" in content_type or resp.text.lstrip().startswith("{"):
+        data    = resp.json()
         columns = [c["name"] for c in data.get("meta", [])]
         rows    = data.get("data", [])
-
         if not rows:
             return "Query returned 0 rows."
-
         capped  = rows[:100]
         header  = " | ".join(columns)
         divider = "-" * min(len(header), 120)
         lines   = [header, divider]
         for row in capped:
             lines.append(" | ".join(str(v) if v is not None else "NULL" for v in row))
-
         if len(rows) > 100:
             lines.append(f"... ({len(rows) - 100} more rows — refine your query)")
-
         return "\n".join(lines)
 
-    except http_requests.exceptions.Timeout:
-        return "Query timed out — simplify or add more filters."
-    except http_requests.exceptions.HTTPError as e:
-        return f"HTTP error: {e.response.status_code} — {e.response.text[:300]}"
+    # ── TSV / plain text fallback ─────────────────────────────────────────────
+    lines = [l for l in resp.text.splitlines() if l.strip()]
+    if not lines:
+        return "Query returned 0 rows."
+    return "\n".join(lines[:101])
+
+
+def run_clickhouse_query(sql: str) -> str:
+    """
+    Execute a read-only SELECT/WITH against the ClickHouse HTTP API.
+
+    Tries four strategies in order so the function works regardless of how
+    the endpoint is configured:
+      1. POST  — SQL in request body, FORMAT in body          (most common for ClickHouse Cloud / proxy)
+      2. POST  — SQL as ?query= param, FORMAT appended        (original AI4Looker style)
+      3. GET   — SQL as ?query= param                         (some self-hosted setups)
+      4. POST  — SQL in body as plain text, no FORMAT param   (bare ClickHouse HTTP interface)
+
+    Auth is tried as Bearer token first, then as basic-auth username from the token.
+    """
+    api_url   = os.getenv("CLICKHOUSE_API_URL", "").rstrip("/")
+    api_token = os.getenv("CLICKHOUSE_API_TOKEN", "")
+
+    if not api_url or not api_token:
+        return (
+            "ClickHouse not configured.\n"
+            "Set CLICKHOUSE_API_URL and CLICKHOUSE_API_TOKEN in your .env file."
+        )
+
+    stripped = sql.strip().upper()
+    if not stripped.startswith("SELECT") and not stripped.startswith("WITH"):
+        return "Error: Only SELECT/WITH queries are permitted."
+
+    sql_with_fmt    = sql.strip() + " FORMAT JSONCompact"
+    bearer_headers  = {"Authorization": f"Bearer {api_token}",
+                       "Content-Type": "text/plain"}
+    errors = []
+
+    # ── Strategy 1: POST body (most common for proxied/cloud ClickHouse) ──────
+    try:
+        print(f"  🔌 CH strategy 1: POST body")
+        resp = http_requests.post(
+            api_url,
+            data=sql_with_fmt.encode("utf-8"),
+            headers=bearer_headers,
+            timeout=30,
+        )
+        if resp.status_code not in (405, 404, 403):
+            return _parse_ch_response(resp)
+        errors.append(f"S1 {resp.status_code}: {resp.text[:120]}")
     except Exception as e:
-        return f"Query error: {e}"
+        errors.append(f"S1 exc: {e}")
+
+    # ── Strategy 2: POST ?query= param (original AI4Looker approach) ──────────
+    try:
+        print(f"  🔌 CH strategy 2: POST ?query=")
+        resp = http_requests.post(
+            api_url,
+            params={"query": sql_with_fmt},
+            headers={"Authorization": f"Bearer {api_token}"},
+            timeout=30,
+        )
+        if resp.status_code not in (405, 404, 403):
+            return _parse_ch_response(resp)
+        errors.append(f"S2 {resp.status_code}: {resp.text[:120]}")
+    except Exception as e:
+        errors.append(f"S2 exc: {e}")
+
+    # ── Strategy 3: GET ?query= param ─────────────────────────────────────────
+    try:
+        print(f"  🔌 CH strategy 3: GET ?query=")
+        resp = http_requests.get(
+            api_url,
+            params={"query": sql_with_fmt},
+            headers={"Authorization": f"Bearer {api_token}"},
+            timeout=30,
+        )
+        if resp.status_code not in (405, 404, 403):
+            return _parse_ch_response(resp)
+        errors.append(f"S3 {resp.status_code}: {resp.text[:120]}")
+    except Exception as e:
+        errors.append(f"S3 exc: {e}")
+
+    # ── Strategy 4: POST body without FORMAT (bare ClickHouse HTTP) ───────────
+    try:
+        print(f"  🔌 CH strategy 4: POST body plain")
+        resp = http_requests.post(
+            api_url,
+            data=sql.strip().encode("utf-8"),
+            headers={"Authorization": f"Bearer {api_token}",
+                     "Content-Type": "text/plain",
+                     "X-ClickHouse-Format": "JSONCompact"},
+            timeout=30,
+        )
+        if resp.status_code < 400:
+            return _parse_ch_response(resp)
+        errors.append(f"S4 {resp.status_code}: {resp.text[:120]}")
+    except Exception as e:
+        errors.append(f"S4 exc: {e}")
+
+    # ── All strategies failed ──────────────────────────────────────────────────
+    print(f"  ❌ All CH strategies failed: {errors}")
+    return (
+        "ClickHouse connection failed across all strategies.\n"
+        "Please verify CLICKHOUSE_API_URL and CLICKHOUSE_API_TOKEN in .env.\n"
+        "Debug info (check server logs): " + " | ".join(errors)
+    )
 
 
 # =============================================================================
@@ -661,6 +744,67 @@ def _call_claude_with_tools(messages: list, max_tokens: int = 2000) -> str:
 def root():
     with open("chat.html", "r") as f:
         return HTMLResponse(content=f.read())
+
+
+@app.get("/debug/clickhouse")
+def debug_clickhouse():
+    """
+    Diagnostic endpoint — tests all 4 connection strategies.
+    Open in browser: http://localhost:8000/debug/clickhouse
+    """
+    api_url   = os.getenv("CLICKHOUSE_API_URL", "")
+    api_token = os.getenv("CLICKHOUSE_API_TOKEN", "")
+
+    config = {
+        "CLICKHOUSE_API_URL":   api_url or "NOT SET",
+        "CLICKHOUSE_API_TOKEN": f"set ({len(api_token)} chars)" if api_token else "NOT SET",
+    }
+
+    if not api_url or not api_token:
+        return {"config": config, "error": "Missing env vars — check .env file"}
+
+    test_sql = "SELECT 1 AS ping FORMAT JSONCompact"
+    results  = {}
+
+    try:
+        r = http_requests.post(api_url, data=test_sql.encode(),
+            headers={"Authorization": f"Bearer {api_token}", "Content-Type": "text/plain"}, timeout=10)
+        results["S1_POST_body"] = {"status": r.status_code, "body": r.text[:200]}
+    except Exception as e:
+        results["S1_POST_body"] = {"error": str(e)}
+
+    try:
+        r = http_requests.post(api_url, params={"query": test_sql},
+            headers={"Authorization": f"Bearer {api_token}"}, timeout=10)
+        results["S2_POST_query_param"] = {"status": r.status_code, "body": r.text[:200]}
+    except Exception as e:
+        results["S2_POST_query_param"] = {"error": str(e)}
+
+    try:
+        r = http_requests.get(api_url, params={"query": test_sql},
+            headers={"Authorization": f"Bearer {api_token}"}, timeout=10)
+        results["S3_GET_query_param"] = {"status": r.status_code, "body": r.text[:200]}
+    except Exception as e:
+        results["S3_GET_query_param"] = {"error": str(e)}
+
+    try:
+        r = http_requests.post(api_url, data="SELECT 1 AS ping".encode(),
+            headers={"Authorization": f"Bearer {api_token}", "Content-Type": "text/plain",
+                     "X-ClickHouse-Format": "JSONCompact"}, timeout=10)
+        results["S4_POST_xheader"] = {"status": r.status_code, "body": r.text[:200]}
+    except Exception as e:
+        results["S4_POST_xheader"] = {"error": str(e)}
+
+    working = [k for k, v in results.items() if isinstance(v, dict) and v.get("status", 999) < 400]
+    return {
+        "config": config,
+        "working_strategies": working,
+        "all_results": results,
+        "recommendation": (
+            f"Use strategy: {working[0]}" if working
+            else "No strategy worked — check URL, token, network/firewall"
+        )
+    }
 
 
 @app.post("/chat")
