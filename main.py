@@ -808,25 +808,45 @@ def debug_clickhouse():
 
 
 @app.post("/chat")
-def chat(payload: ChatRequest):
-    """
-    Conversational pipeline Q&A.
-    Sends full history each turn; Claude queries ClickHouse live as needed.
-    """
-    messages = []
-    for turn in payload.history:
-        messages.append({"role": turn.role, "content": turn.content})
-    messages.append({"role": "user", "content": payload.message})
+def chat(req: ChatRequest):
 
-    print(f"💬 [chat] Q: {payload.message[:120]}")
     try:
-        reply = _call_claude_with_tools(messages)
-    except Exception as exc:
-        traceback.print_exc()
-        raise HTTPException(status_code=502, detail=f"Claude error: {exc}")
+        print("QUESTION:", req.question)
 
-    print(f"✅ [chat] Done")
-    return {"reply": reply}
+        # Step 1
+        sql_query = generate_sql(req.question)
+        print("GENERATED SQL:")
+        print(sql_query)
+
+        # Step 2
+        validate_sql(sql_query)
+
+        # Step 3
+        query_result = run_clickhouse_query(sql_query)
+        print("CLICKHOUSE RESULT:")
+        print(query_result)
+
+        # Step 4
+        final_response = generate_answer(
+            question=req.question,
+            sql=sql_query,
+            data=query_result
+        )
+
+        return {
+            "question": req.question,
+            "sql": sql_query,
+            "data": query_result,
+            "answer": final_response
+        }
+
+    except Exception as e:
+        print("ERROR OCCURRED:")
+        print(str(e))
+
+        return {
+            "error": str(e)
+        }
 
 
 @app.post("/export/pdf")
