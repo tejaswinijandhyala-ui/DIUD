@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+anthropic
+python-pptx
+reportlab
+requests
+pydantic
+python-dotenv
