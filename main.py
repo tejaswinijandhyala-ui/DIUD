@@ -1,70 +1,60 @@
-"""
-main.py
-PipeGen Chat v2 — FastAPI Backend
-Conversational AI over ClickHouse pipeline data, with PDF & PPTX export.
+# =============================================================================
+# Imports
+# =============================================================================
 
-FIX vs v1:
-  - ClickHouse connector now returns detailed error text so Claude can report it
-    instead of silently falling back to "I could not generate a response."
-  - Tool loop errors are surfaced as tool_result content so Claude always
-    produces a final text response.
-  - /debug/clickhouse endpoint included for fast connection diagnosis.
-  - Better response extraction: scans ALL content blocks for text.
-"""
-
-# ── Standard Library ──────────────────────────────────────────────────────────
 import io
 import json
 import os
 import re
 import traceback
 from datetime import date
-from typing import List, Literal, Optional
+from typing import List, Literal
 
-# ── Third-Party: Web Framework ────────────────────────────────────────────────
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
-
-# ── Third-Party: Environment ──────────────────────────────────────────────────
 from dotenv import load_dotenv
 
-# ── Third-Party: AI ───────────────────────────────────────────────────────────
 import anthropic
+import clickhouse_connect
 
-# ── Third-Party: HTTP ─────────────────────────────────────────────────────────
-import requests as http_requests
-
-# ── Third-Party: PPTX ────────────────────────────────────────────────────────
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
-# ── Third-Party: PDF ─────────────────────────────────────────────────────────
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import (
-    BaseDocTemplate, Frame, PageTemplate,
-    HRFlowable, PageBreak,
-    Paragraph, Spacer, Table, TableStyle,
+    BaseDocTemplate,
+    Frame,
+    PageTemplate,
+    HRFlowable,
+    PageBreak,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
 )
+
+# =============================================================================
+# Load ENV
+# =============================================================================
 
 load_dotenv()
 
 # =============================================================================
-# App
+# FastAPI App
 # =============================================================================
 
 app = FastAPI(
-    title="PipeGen Chat v2",
-    description="Conversational pipeline intelligence powered by Claude and ClickHouse.",
-    version="2.0.0",
-    redirect_slashes=False,
+    title="DIUD",
+    description="Decision Intelligence Using Data",
+    version="3.0.0",
 )
 
 app.add_middleware(
@@ -75,224 +65,106 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_ai_client   = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+# =============================================================================
+# Claude
+# =============================================================================
+
+_ai_client = anthropic.Anthropic(
+    api_key=os.getenv("ANTHROPIC_API_KEY")
+)
+
 _CLAUDE_MODEL = "claude-opus-4-5"
 
+# =============================================================================
+# ClickHouse Direct Client
+# =============================================================================
+
+_clickhouse_client = clickhouse_connect.get_client(
+    host=os.getenv("CLICKHOUSE_HOST"),
+    port=int(os.getenv("CLICKHOUSE_PORT", 8443)),
+    username=os.getenv("CLICKHOUSE_USER"),
+    password=os.getenv("CLICKHOUSE_PASSWORD"),
+    database=os.getenv("CLICKHOUSE_DB"),
+    secure=True
+)
 
 # =============================================================================
 # ClickHouse Query Runner
 # =============================================================================
 
-def _is_health_response(resp: http_requests.Response) -> bool:
-    """
-    Return True when the response looks like a proxy health-check ping
-    rather than an actual ClickHouse query result.
-
-    Example health body: {"status":"ok","service":"ClickHouse API"}
-    A real ClickHouse JSONCompact response always has a "meta" key.
-    """
-    try:
-        body = resp.json()
-        # Real ClickHouse JSONCompact always contains "meta" and "data"
-        if "meta" in body:
-            return False
-        # Looks like a health / error response — not query data
-        return True
-    except Exception:
-        return False
-
-
-def _parse_ch_response(resp: http_requests.Response) -> str:
-    """
-    Parse a ClickHouse HTTP response into a readable pipe-delimited table.
-    Returns None if the response looks like a health-check (not query data).
-    """
-    resp.raise_for_status()
-
-    # Reject proxy health-check responses
-    if _is_health_response(resp):
-        return None
-
-    content_type = resp.headers.get("content-type", "")
-
-    if "json" in content_type or resp.text.lstrip().startswith("{"):
-        try:
-            data    = resp.json()
-            columns = [c["name"] for c in data.get("meta", [])]
-            rows    = data.get("data", [])
-            if not rows:
-                return "Query returned 0 rows."
-            capped  = rows[:100]
-            header  = " | ".join(columns)
-            divider = "-" * min(len(header), 140)
-            lines   = [header, divider]
-            for row in capped:
-                lines.append(" | ".join(str(v) if v is not None else "NULL" for v in row))
-            if len(rows) > 100:
-                lines.append(f"... ({len(rows) - 100} more rows — refine your query)")
-            return "\n".join(lines)
-        except Exception:
-            pass
-
-    lines = [l for l in resp.text.splitlines() if l.strip()]
-    if not lines:
-        return "Query returned 0 rows."
-    return "\n".join(lines[:101])
-
-
-def _build_strategies(base_url: str, api_token: str, sql: str):
-    """
-    Generate all (label, callable) strategy pairs to try.
-
-    Because CLICKHOUSE_API_URL may point to a FastAPI proxy rather than raw
-    ClickHouse, we try multiple PATH variants (/query, /execute, /sql, root)
-    combined with multiple HTTP methods and body formats.
-
-    The debug endpoint revealed:
-      - Root GET  → returns health JSON ({"status":"ok"}) — NOT query data
-      - Root POST → 405 Method Not Allowed
-    So the real query endpoint is almost certainly at a sub-path on the proxy.
-
-    Order (most → least likely for a FastAPI ClickHouse proxy):
-      1.  POST  <base>/query      JSON body  {"sql": "..."}
-      2.  POST  <base>/query      JSON body  {"query": "..."}
-      3.  POST  <base>/query      ?query=    param
-      4.  GET   <base>/query      ?query=    param
-      5.  POST  <base>/execute    JSON body  {"sql": "..."}
-      6.  POST  <base>/execute    JSON body  {"query": "..."}
-      7.  GET   <base>/execute    ?query=    param
-      8.  POST  <base>/sql        JSON body  {"sql": "..."}
-      9.  GET   <base>/sql        ?query=    param
-      10. POST  <base>/           body text  (raw ClickHouse HTTP)
-      11. POST  <base>/           ?query=    param  (AI4Looker style)
-      12. GET   <base>/           ?query=    param  (bare ClickHouse HTTP)
-      13. POST  <base>/           body + X-ClickHouse-Format header
-    """
-    auth_h    = {"Authorization": f"Bearer {api_token}"}
-    json_h    = {**auth_h, "Content-Type": "application/json"}
-    text_h    = {**auth_h, "Content-Type": "text/plain"}
-    sql_fmt   = sql.strip() + " FORMAT JSONCompact"
-
-    paths = {
-        "query":   f"{base_url}/query",
-        "execute": f"{base_url}/execute",
-        "sql":     f"{base_url}/sql",
-        "root":    base_url,
-    }
-
-    return [
-        # ── Proxy sub-path strategies (FastAPI wrapper) ────────────────────
-        ("POST /query  {sql:}    json",
-         lambda: http_requests.post(paths["query"],   json={"sql": sql_fmt},   headers=json_h, timeout=45)),
-        ("POST /query  {query:}  json",
-         lambda: http_requests.post(paths["query"],   json={"query": sql_fmt}, headers=json_h, timeout=45)),
-        ("POST /query  ?query=   param",
-         lambda: http_requests.post(paths["query"],   params={"query": sql_fmt}, headers=auth_h, timeout=45)),
-        ("GET  /query  ?query=   param",
-         lambda: http_requests.get(paths["query"],    params={"query": sql_fmt}, headers=auth_h, timeout=45)),
-
-        ("POST /execute {sql:}   json",
-         lambda: http_requests.post(paths["execute"], json={"sql": sql_fmt},   headers=json_h, timeout=45)),
-        ("POST /execute {query:} json",
-         lambda: http_requests.post(paths["execute"], json={"query": sql_fmt}, headers=json_h, timeout=45)),
-        ("GET  /execute ?query=  param",
-         lambda: http_requests.get(paths["execute"],  params={"query": sql_fmt}, headers=auth_h, timeout=45)),
-
-        ("POST /sql    {sql:}    json",
-         lambda: http_requests.post(paths["sql"],     json={"sql": sql_fmt},   headers=json_h, timeout=45)),
-        ("GET  /sql    ?query=   param",
-         lambda: http_requests.get(paths["sql"],      params={"query": sql_fmt}, headers=auth_h, timeout=45)),
-
-        # ── Root / raw ClickHouse HTTP strategies ─────────────────────────
-        ("POST / body  text/plain",
-         lambda: http_requests.post(paths["root"],    data=sql_fmt.encode(),   headers=text_h, timeout=45)),
-        ("POST / ?query= param",
-         lambda: http_requests.post(paths["root"],    params={"query": sql_fmt}, headers=auth_h, timeout=45)),
-        ("GET  / ?query= param",
-         lambda: http_requests.get(paths["root"],     params={"query": sql_fmt}, headers=auth_h, timeout=45)),
-        ("POST / X-ClickHouse-Format header",
-         lambda: http_requests.post(paths["root"],    data=sql.strip().encode(),
-                                    headers={**text_h, "X-ClickHouse-Format": "JSONCompact"}, timeout=45)),
-    ]
-
+FORBIDDEN_SQL = [
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "DROP",
+    "ALTER",
+    "TRUNCATE",
+    "CREATE",
+]
 
 def run_clickhouse_query(sql: str) -> str:
-    """
-    Execute a read-only SELECT/WITH against the ClickHouse API.
 
-    Works with both:
-      • Raw ClickHouse HTTP interface  (port 8123/8443)
-      • FastAPI proxy wrapper          (e.g. clickhouse-api-*.onrender.com)
+    try:
 
-    Tries 13 strategies across multiple paths and request formats.
-    NEVER raises — always returns a string so Claude can relay errors to the user.
-    """
-    base_url  = (os.getenv("CLICKHOUSE_API_URL") or "").rstrip("/")
-    api_token = os.getenv("CLICKHOUSE_API_TOKEN") or ""
+        stripped = sql.strip().upper()
 
-    if not base_url:
+        if not (
+            stripped.startswith("SELECT")
+            or stripped.startswith("WITH")
+        ):
+            return (
+                "ERROR: Only SELECT/WITH queries are allowed."
+            )
+
+        for keyword in FORBIDDEN_SQL:
+            if keyword in stripped:
+                return f"ERROR: Forbidden SQL keyword detected: {keyword}"
+
+        # Remove risky FINAL keyword automatically
+        sql = sql.replace(" FINAL", "")
+
+        print("🔍 RUNNING SQL:")
+        print(sql)
+
+        result = _clickhouse_client.query(sql)
+
+        columns = result.column_names
+        rows = result.result_rows
+
+        if not rows:
+            return "Query returned 0 rows."
+
+        header = " | ".join(columns)
+
+        lines = [
+            header,
+            "-" * min(len(header), 140)
+        ]
+
+        for row in rows[:100]:
+
+            lines.append(
+                " | ".join(
+                    str(v) if v is not None else "NULL"
+                    for v in row
+                )
+            )
+
+        if len(rows) > 100:
+            lines.append(
+                f"... ({len(rows) - 100} more rows)"
+            )
+
+        return "\n".join(lines)
+
+    except Exception as e:
+
+        traceback.print_exc()
+
         return (
-            "ERROR: CLICKHOUSE_API_URL is not set in .env.\n"
-            "Please add it and restart the server."
+            "DATABASE ERROR:\n\n"
+            f"{str(e)}"
         )
-    if not api_token:
-        return (
-            "ERROR: CLICKHOUSE_API_TOKEN is not set in .env.\n"
-            "Please add it and restart the server."
-        )
-
-    stripped = sql.strip().upper()
-    if not (stripped.startswith("SELECT") or stripped.startswith("WITH")):
-        return "ERROR: Only SELECT/WITH queries are permitted (no DDL/DML)."
-
-    errors = []
-
-    for label, fn in _build_strategies(base_url, api_token, sql):
-        try:
-            print(f"  🔌 Trying: {label}")
-            r = fn()
-            print(f"  📡 Status: {r.status_code}  body[:80]: {r.text[:80]}")
-
-            # Skip health-check responses
-            if r.status_code == 200 and _is_health_response(r):
-                errors.append(f"{label} → 200 but health-check response (no 'meta' key)")
-                continue
-
-            if r.status_code in (404, 405, 422):
-                errors.append(f"{label} → HTTP {r.status_code} (wrong path/method)")
-                continue
-
-            if r.status_code in (401, 403):
-                errors.append(f"{label} → HTTP {r.status_code} (auth failure): {r.text[:120]}")
-                continue
-
-            result = _parse_ch_response(r)
-            if result is None:
-                errors.append(f"{label} → 200 but health-check body")
-                continue
-
-            print(f"  ✅ Success via: {label}")
-            return result
-
-        except http_requests.exceptions.Timeout:
-            errors.append(f"{label} → Timeout (>45s)")
-        except Exception as e:
-            errors.append(f"{label} → {type(e).__name__}: {str(e)[:120]}")
-
-    # All strategies failed
-    print(f"  ❌ All strategies failed ({len(errors)} attempts)")
-    return (
-        "DATABASE CONNECTION FAILED.\n\n"
-        f"Base URL: {base_url}\n"
-        f"Tried {len(errors)} strategies:\n"
-        + "\n".join(f"  • {e}" for e in errors)
-        + "\n\nOpen /debug/clickhouse in your browser for a full diagnostic.\n"
-        "Common fixes:\n"
-        "  1. Verify CLICKHOUSE_API_URL points to the proxy base URL\n"
-        "  2. Check CLICKHOUSE_API_TOKEN is correct\n"
-        "  3. Ask your proxy admin what endpoint accepts SQL queries"
-    )
-
 
 # =============================================================================
 # System Prompt
