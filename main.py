@@ -1,17 +1,3 @@
-# =============================================================================
-# DIUD — Decision Intelligence Using Data
-# FastAPI backend: Claude + ClickHouse HTTP proxy + PDF/PPTX export
-#
-# Your ClickHouse proxy (OpenAPI spec confirmed):
-#   POST /query   body: {"query": "<SQL>", "limit": <int|null>}
-#   Authorization: Bearer <token>
-#
-# ENV variables needed in .env:
-#   ANTHROPIC_API_KEY=sk-ant-...
-#   CLICKHOUSE_API_URL=https://clickhouse-api-j55l.onrender.com
-#   CLICKHOUSE_API_TOKEN=your_bearer_token_here
-# =============================================================================
-
 import io
 import json
 import os
@@ -35,17 +21,11 @@ from pptx.util import Inches, Pt
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import (
-    BaseDocTemplate,
-    Frame,
-    PageTemplate,
-    PageBreak,
-    Paragraph,
-    Spacer,
-    Table,
-    TableStyle,
+    BaseDocTemplate, Frame, PageTemplate,
+    PageBreak, Paragraph, Spacer, Table, TableStyle,
 )
 
 # =============================================================================
@@ -58,7 +38,7 @@ load_dotenv()
 # FastAPI App
 # =============================================================================
 
-app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="1.0.0")
+app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -72,22 +52,11 @@ app.add_middleware(
 # Claude client
 # =============================================================================
 
-_ai_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+_ai_client   = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 _CLAUDE_MODEL = "claude-sonnet-4-5"
 
 # =============================================================================
-# ClickHouse HTTP proxy connector
-#
-# Confirmed from your OpenAPI spec:
-#   POST /query
-#   Request body (QueryRequest schema):
-#     { "query": "<SQL string>", "limit": <integer or null> }
-#   Auth: Bearer token via HTTPBearer
-#
-# Other available endpoints (no query body needed):
-#   GET  /databases              → list all databases
-#   GET  /tables/{database}      → list tables in a database
-#   GET  /schema/{database}/{table} → get column schema for a table
+# ClickHouse HTTP proxy — base helpers
 # =============================================================================
 
 def _base_url() -> str:
@@ -99,154 +68,176 @@ def _token() -> str:
 def _auth_headers() -> dict:
     return {
         "Authorization": f"Bearer {_token()}",
-        "Content-Type": "application/json",
+        "Content-Type":  "application/json",
     }
 
 FORBIDDEN_KEYWORDS = ["INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE"]
 
-
-def run_clickhouse_query(sql: str) -> str:
-    """
-    Execute a SELECT/WITH query via POST /query on your ClickHouse HTTP proxy.
-    Body: {"query": "<SQL>"}   (field name is "query", NOT "sql" — confirmed from OpenAPI spec)
-    Returns a plain-text table string, or an error message starting with ERROR:/DATABASE.
-    Never raises — always returns a string so Claude can report failures gracefully.
-    """
-    base_url = _base_url()
-    token    = _token()
-
-    if not base_url:
-        return (
-            "DATABASE CONNECTION FAILED: CLICKHOUSE_API_URL is not set. "
-            "Add it to your .env file and restart. Example:\n"
-            "CLICKHOUSE_API_URL=https://clickhouse-api-j55l.onrender.com"
-        )
-    if not token:
-        return (
-            "DATABASE CONNECTION FAILED: CLICKHOUSE_API_TOKEN is not set. "
-            "Add your Bearer token to .env and restart."
-        )
-
-    # Safety check — only allow read queries
-    stripped = sql.strip().upper()
-    if not (stripped.startswith("SELECT") or stripped.startswith("WITH")):
-        return "ERROR: Only SELECT/WITH queries are permitted."
-    for kw in FORBIDDEN_KEYWORDS:
-        if re.search(rf'\b{kw}\b', stripped):
-            return f"ERROR: Forbidden SQL keyword detected: {kw}"
-
-    print(f"🔍 SQL → POST {base_url}/query")
-    print(f"   {sql[:300]}")
-
-    try:
-        resp = httpx.post(
-            f"{base_url}/query",
-            headers=_auth_headers(),
-            # ⚠️  Field name MUST be "query" per your OpenAPI QueryRequest schema
-            json={"query": sql},
-            timeout=30,
-        )
-
-        # Handle HTTP errors clearly
-        if resp.status_code == 401:
-            return "DATABASE CONNECTION FAILED: 401 Unauthorized — check your CLICKHOUSE_API_TOKEN."
-        if resp.status_code == 403:
-            return "DATABASE CONNECTION FAILED: 403 Forbidden — token may not have read permission."
-        if resp.status_code == 422:
-            # Validation error from the proxy — log detail for debugging
-            detail = resp.text[:500]
-            print(f"   422 detail: {detail}")
-            return f"ERROR: Query was rejected by the proxy (422 Unprocessable Entity). Detail: {detail}"
-        if resp.status_code != 200:
-            return f"DATABASE ERROR: HTTP {resp.status_code} — {resp.text[:400]}"
-
-        # Parse the response
-        payload = resp.json()
-        print(f"   Response type: {type(payload).__name__}, keys: {list(payload.keys()) if isinstance(payload, dict) else 'list'}")
-
-        # Handle different response shapes the proxy might return
-        if isinstance(payload, list):
-            # Direct list of row dicts
-            rows = payload
-        elif isinstance(payload, dict):
-            # Try common wrapper keys
-            rows = (
-                payload.get("data")
-                or payload.get("rows")
-                or payload.get("result")
-                or payload.get("results")
-                or None
-            )
-            if rows is None:
-                # Unknown shape — return raw so Claude can interpret
-                return json.dumps(payload, indent=2, default=str)[:3000]
-        else:
-            return f"Unexpected response type: {type(payload)}"
-
-        if not rows:
-            return "Query returned 0 rows."
-
-        # Build a readable text table
-        if isinstance(rows[0], dict):
-            cols   = list(rows[0].keys())
-            header = " | ".join(cols)
-            sep    = "-" * min(len(header), 140)
-            lines  = [header, sep]
-            for row in rows[:100]:
-                lines.append(" | ".join(str(row.get(c, "NULL")) for c in cols))
-        else:
-            # List of lists
-            lines = [" | ".join(str(v) for v in rows[0]), "-" * 80]
-            for row in rows[1:101]:
-                lines.append(" | ".join(str(v) for v in row))
-
-        if len(rows) > 100:
-            lines.append(f"... ({len(rows) - 100} more rows not shown)")
-
-        result = "\n".join(lines)
-        print(f"   ✅ {len(rows)} rows returned. Preview: {result[:200]}")
-        return result
-
-    except httpx.ConnectError as e:
-        return (
-            f"DATABASE CONNECTION FAILED: Could not reach {base_url}. "
-            f"Check that the URL is correct and the service is running.\nDetail: {e}"
-        )
-    except httpx.TimeoutException:
-        return "DATABASE CONNECTION FAILED: Query timed out after 30 seconds."
-    except Exception as exc:
-        traceback.print_exc()
-        return f"DATABASE CONNECTION FAILED: {type(exc).__name__}: {exc}"
-
-
 # =============================================================================
-# Helper: introspect schema via the proxy's /schema endpoint
+# Schema discovery — called once at startup, result stored in _LIVE_SCHEMA
 # =============================================================================
 
-def get_table_schema(database: str, table: str) -> dict:
-    """Fetch column definitions from GET /schema/{database}/{table}."""
+# Will be populated at startup: { "database.table": [{"name":..,"type":..}, ...], ... }
+_LIVE_SCHEMA: dict = {}
+# Human-readable string injected into the system prompt
+_SCHEMA_BLOCK: str = "Schema not yet loaded."
+
+
+def _proxy_get(path: str) -> dict | list | None:
+    """GET {base_url}{path} with auth. Returns parsed JSON or None on error."""
     base_url = _base_url()
     token    = _token()
     if not base_url or not token:
-        return {"error": "API URL or token not configured"}
+        return None
     try:
-        resp = httpx.get(
-            f"{base_url}/schema/{database}/{table}",
-            headers=_auth_headers(),
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            return resp.json()
-        return {"error": f"HTTP {resp.status_code}: {resp.text[:300]}"}
+        r = httpx.get(f"{base_url}{path}", headers=_auth_headers(), timeout=20)
+        if r.status_code == 200:
+            return r.json()
+        print(f"   ⚠️  GET {path} → HTTP {r.status_code}: {r.text[:200]}")
+        return None
     except Exception as e:
-        return {"error": str(e)}
+        print(f"   ⚠️  GET {path} → {e}")
+        return None
+
+
+def discover_schema() -> str:
+    """
+    Walk /databases → /tables/{db} → /schema/{db}/{table}.
+    Returns a formatted schema string for the system prompt.
+    Populates _LIVE_SCHEMA global.
+    """
+    global _LIVE_SCHEMA, _SCHEMA_BLOCK
+
+    print("🔎 Discovering schema from ClickHouse proxy…")
+
+    databases_raw = _proxy_get("/databases")
+    if not databases_raw:
+        msg = "⚠️  Could not fetch databases — check CLICKHOUSE_API_URL / CLICKHOUSE_API_TOKEN."
+        print(msg)
+        _SCHEMA_BLOCK = msg
+        return msg
+
+    # Normalise: could be a list of strings or list of dicts
+    if isinstance(databases_raw, list) and databases_raw:
+        if isinstance(databases_raw[0], str):
+            databases = databases_raw
+        elif isinstance(databases_raw[0], dict):
+            databases = [
+                d.get("name") or d.get("database") or list(d.values())[0]
+                for d in databases_raw
+            ]
+        else:
+            databases = [str(d) for d in databases_raw]
+    elif isinstance(databases_raw, dict):
+        databases = (
+            databases_raw.get("data") or
+            databases_raw.get("databases") or
+            list(databases_raw.values())[0]
+            if databases_raw else []
+        )
+    else:
+        databases = []
+
+    # Skip system databases
+    SKIP_DBS = {"system", "information_schema", "INFORMATION_SCHEMA"}
+    databases = [d for d in databases if d not in SKIP_DBS]
+    print(f"   Databases found: {databases}")
+
+    schema_lines = []
+    schema_dict  = {}
+
+    for db in databases:
+        tables_raw = _proxy_get(f"/tables/{db}")
+        if not tables_raw:
+            continue
+
+        # Normalise table list
+        if isinstance(tables_raw, list) and tables_raw:
+            if isinstance(tables_raw[0], str):
+                tables = tables_raw
+            elif isinstance(tables_raw[0], dict):
+                tables = [
+                    t.get("name") or t.get("table") or list(t.values())[0]
+                    for t in tables_raw
+                ]
+            else:
+                tables = [str(t) for t in tables_raw]
+        elif isinstance(tables_raw, dict):
+            tables = (
+                tables_raw.get("data") or
+                tables_raw.get("tables") or
+                list(tables_raw.values())[0]
+                if tables_raw else []
+            )
+        else:
+            tables = []
+
+        print(f"   {db}: tables = {tables}")
+
+        for tbl in tables:
+            schema_raw = _proxy_get(f"/schema/{db}/{tbl}")
+            if not schema_raw:
+                schema_lines.append(f"\nTABLE: {db}.{tbl}\n  (schema unavailable)")
+                continue
+
+            # Normalise columns list
+            if isinstance(schema_raw, list):
+                cols = schema_raw
+            elif isinstance(schema_raw, dict):
+                cols = (
+                    schema_raw.get("columns") or
+                    schema_raw.get("data") or
+                    schema_raw.get("schema") or
+                    [schema_raw]
+                )
+            else:
+                cols = []
+
+            schema_dict[f"{db}.{tbl}"] = cols
+
+            col_lines = []
+            for col in cols:
+                if isinstance(col, dict):
+                    col_name = (
+                        col.get("name") or col.get("column_name") or
+                        col.get("Field") or list(col.keys())[0]
+                    )
+                    col_type = (
+                        col.get("type") or col.get("data_type") or
+                        col.get("Type") or ""
+                    )
+                    col_comment = col.get("comment") or col.get("Comment") or ""
+                    comment_str = f"  — {col_comment}" if col_comment else ""
+                    col_lines.append(f"  {col_name:<35} {col_type}{comment_str}")
+                else:
+                    col_lines.append(f"  {col}")
+
+            schema_lines.append(f"\nTABLE: {db}.{tbl}")
+            schema_lines.extend(col_lines)
+
+    _LIVE_SCHEMA  = schema_dict
+    _SCHEMA_BLOCK = "\n".join(schema_lines) if schema_lines else "No tables found."
+
+    print(f"✅ Schema loaded: {list(schema_dict.keys())}")
+    return _SCHEMA_BLOCK
 
 
 # =============================================================================
-# System Prompt
+# Build system prompt dynamically with live schema
 # =============================================================================
 
-_SYSTEM_PROMPT = """
+def _build_system_prompt() -> str:
+    """
+    Assembles the full system prompt with the live-discovered schema block.
+    Called after discover_schema() and whenever schema refreshes.
+    """
+    schema = _SCHEMA_BLOCK or "Schema not yet loaded — try restarting the server."
+
+    # Derive table reference hint from discovered tables (for sample queries)
+    table_refs = list(_LIVE_SCHEMA.keys())
+    primary_table = table_refs[0] if table_refs else "your_database.deals"
+
+    return f"""
 You are DIUD (Decision Intelligence Using Data) — a conversational data assistant.
 You have LIVE access to a ClickHouse database via the query_clickhouse tool.
 
@@ -255,9 +246,10 @@ CORE RULES:
 - NEVER fabricate numbers. Query the DB for every metric question.
 - NEVER run destructive SQL (INSERT / UPDATE / DELETE / DROP / ALTER / TRUNCATE).
 - If a query fails or returns an error, report the exact error message to the user.
+- ALWAYS use the fully qualified table name: database.table (e.g. {primary_table}).
 - Answer in clean markdown: use tables for data, bold for key numbers.
 - Be concise but complete.
-- When generating export content, use ## section headers so the PDF/PPTX renderer can parse them.
+- When generating export content, use ## section headers.
 
 =================================================================
 DATABASE ACCESS
@@ -265,123 +257,200 @@ DATABASE ACCESS
 
 Tool: query_clickhouse
 Use it for any question about deals, pipeline, metrics, win/loss, or any data.
-If it returns DATABASE CONNECTION FAILED, relay that message and tell the user
+If it returns DATABASE CONNECTION FAILED, relay the message and tell the user
 to open /debug/db to diagnose connectivity.
 
 =================================================================
-TABLE SCHEMA — deals (only table in scope for now)
+LIVE TABLE SCHEMA (auto-discovered at startup)
 =================================================================
-
-TABLE: deals
-One row per deal / sales opportunity.
-
-COLUMNS:
-  id              INTEGER   — unique deal identifier
-  name            STRING    — deal / opportunity name
-  stage           STRING    — current pipeline stage (see STAGE LIST below)
-  owner           STRING    — AE / deal owner name
-  amount          FLOAT     — deal value in USD
-  region          STRING    — geographic region
-  source          STRING    — lead source
-  industry        STRING    — customer industry vertical
-  close_date      DATE      — expected or actual close date
-  created_date    DATE      — date deal was created
-  status          STRING    — 'open', 'won', 'lost'
-  lost_reason     STRING    — reason for loss (NULL if not lost)
-  won_reason      STRING    — reason for win (NULL if not won)
-  competitor      STRING    — competitor involved (NULL if none)
-  notes           STRING    — freeform notes
-
-⚠️  Replace these columns with your REAL deals table column names before deploying.
-    You can fetch the actual schema using GET /schema/{database}/{table} on the proxy.
-
-=================================================================
-STAGE LIST
-=================================================================
-  'Prospecting'
-  'Qualification'
-  'Discovery'
-  'Proposal'
-  'Negotiation'
-  'Closed Won'
-  'Closed Lost'
+{schema}
 
 =================================================================
 QUERY RULES
 =================================================================
-1. SELECT / WITH only — no INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE
-2. LIMIT row-level queries to 100 rows maximum
-3. Use COUNT(DISTINCT id) for unique deal counts
-4. For USD totals: ROUND(SUM(amount)/1e6, 1) gives $M figures
-5. Case-insensitive matching: use LOWER(col) = LOWER('value')  or ILIKE
-6. NULLs in display: COALESCE(col, 'Unknown')
+1. SELECT / WITH only — never INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE
+2. ALWAYS qualify table names: use {primary_table} not just the bare table name
+3. LIMIT row-level queries to 100 rows maximum
+4. Use COUNT(DISTINCT <pk_col>) for unique counts
+5. For USD totals: ROUND(SUM(amount_col)/1e6, 1) gives $M figures (adapt col name)
+6. Case-insensitive matching: LOWER(col) = LOWER('value')
+7. NULL display: COALESCE(col, 'Unknown')
+8. If a query fails with a column-not-found error, re-inspect the schema above
+   and retry with the correct column name — DO NOT guess column names.
 
 =================================================================
-BUSINESS DEFINITIONS
-=================================================================
-"Active pipeline"  → status = 'open'
-"Won deals"        → status = 'won'   OR stage = 'Closed Won'
-"Lost deals"       → status = 'lost'  OR stage = 'Closed Lost'
-"Win rate"         → won / (won + lost) * 100
-"Pipeline value"   → SUM(amount) WHERE status = 'open'
-
-=================================================================
-SAMPLE QUERIES
+SAMPLE QUERY PATTERN (adapt to actual column names from schema above)
 =================================================================
 
--- Deals by stage:
-SELECT stage, COUNT(DISTINCT id) AS deals, ROUND(SUM(amount)/1e6,2) AS value_m
-FROM deals
-GROUP BY stage ORDER BY value_m DESC
+-- Count rows by a categorical column:
+SELECT <category_col>, COUNT(*) AS cnt
+FROM {primary_table}
+GROUP BY <category_col>
+ORDER BY cnt DESC
+LIMIT 20
 
--- Top 10 open deals:
-SELECT name, owner, stage, amount, close_date
-FROM deals WHERE status = 'open'
-ORDER BY amount DESC LIMIT 10
-
--- Win rate by region:
-SELECT
-  region,
-  COUNT(DISTINCT CASE WHEN status='won'  THEN id END) AS won,
-  COUNT(DISTINCT CASE WHEN status='lost' THEN id END) AS lost,
-  ROUND(
-    COUNT(DISTINCT CASE WHEN status='won' THEN id END) * 100.0
-    / NULLIF(COUNT(DISTINCT CASE WHEN status IN ('won','lost') THEN id END), 0)
-  , 1) AS win_rate_pct
-FROM deals
-GROUP BY region ORDER BY won DESC
-
--- Pipeline by industry:
-SELECT COALESCE(industry,'Unknown') AS industry,
-       COUNT(DISTINCT id) AS deals,
-       ROUND(SUM(amount)/1e6,1) AS pipeline_m
-FROM deals WHERE status = 'open'
-GROUP BY industry ORDER BY pipeline_m DESC
+-- Aggregate a numeric column by category:
+SELECT <category_col>, ROUND(SUM(<amount_col>)/1e6, 2) AS value_m
+FROM {primary_table}
+GROUP BY <category_col>
+ORDER BY value_m DESC
 
 =================================================================
 """
 
+
+# Initialise with a placeholder — will be replaced on startup
+_SYSTEM_PROMPT = _build_system_prompt()
+
+
+# =============================================================================
+# ClickHouse query runner
+# =============================================================================
+
+def run_clickhouse_query(sql: str) -> str:
+    """
+    POST /query  body: {{"query": "<SQL>"}}
+    Returns plain-text table or error string starting with ERROR:/DATABASE.
+    Never raises.
+    """
+    base_url = _base_url()
+    token    = _token()
+
+    if not base_url:
+        return (
+            "DATABASE CONNECTION FAILED: CLICKHOUSE_API_URL is not set. "
+            "Add it to .env and restart."
+        )
+    if not token:
+        return (
+            "DATABASE CONNECTION FAILED: CLICKHOUSE_API_TOKEN is not set. "
+            "Add it to .env and restart."
+        )
+
+    stripped = sql.strip().upper()
+    if not (stripped.startswith("SELECT") or stripped.startswith("WITH")):
+        return "ERROR: Only SELECT/WITH queries are permitted."
+    for kw in FORBIDDEN_KEYWORDS:
+        if re.search(rf'\b{kw}\b', stripped):
+            return f"ERROR: Forbidden keyword: {kw}"
+
+    print(f"🔍 SQL → POST {base_url}/query\n   {sql[:300]}")
+
+    try:
+        resp = httpx.post(
+            f"{base_url}/query",
+            headers=_auth_headers(),
+            json={"query": sql},   # ← "query" field confirmed by your OpenAPI spec
+            timeout=30,
+        )
+
+        if resp.status_code == 401:
+            return "DATABASE CONNECTION FAILED: 401 Unauthorized — check CLICKHOUSE_API_TOKEN."
+        if resp.status_code == 403:
+            return "DATABASE CONNECTION FAILED: 403 Forbidden."
+        if resp.status_code == 422:
+            detail = resp.text[:600]
+            print(f"   422: {detail}")
+            return f"ERROR: Proxy rejected the query (422). Detail: {detail}"
+        if resp.status_code == 500:
+            detail = resp.text[:600]
+            print(f"   500: {detail}")
+            return (
+                f"DATABASE ERROR: HTTP 500 Internal Server Error from the proxy.\n"
+                f"This usually means the SQL references a table or column that doesn't exist.\n"
+                f"Detail: {detail}"
+            )
+        if resp.status_code != 200:
+            return f"DATABASE ERROR: HTTP {resp.status_code} — {resp.text[:400]}"
+
+        payload = resp.json()
+        print(f"   Response shape: {type(payload).__name__}, "
+              f"keys={list(payload.keys()) if isinstance(payload, dict) else 'list'}")
+
+        # Normalise to a list of rows
+        if isinstance(payload, list):
+            rows = payload
+        elif isinstance(payload, dict):
+            rows = (
+                payload.get("data") or payload.get("rows") or
+                payload.get("result") or payload.get("results") or None
+            )
+            if rows is None:
+                return json.dumps(payload, indent=2, default=str)[:3000]
+        else:
+            return f"Unexpected response type: {type(payload)}"
+
+        if not rows:
+            return "Query returned 0 rows."
+
+        # Build text table
+        if isinstance(rows[0], dict):
+            cols   = list(rows[0].keys())
+            header = " | ".join(cols)
+            lines  = [header, "-" * min(len(header), 140)]
+            for row in rows[:100]:
+                lines.append(" | ".join(str(row.get(c, "NULL")) for c in cols))
+        else:
+            lines = [" | ".join(str(v) for v in rows[0]), "-" * 80]
+            for row in rows[1:101]:
+                lines.append(" | ".join(str(v) for v in row))
+
+        if len(rows) > 100:
+            lines.append(f"... ({len(rows) - 100} more rows not shown)")
+
+        result = "\n".join(lines)
+        print(f"   ✅ {len(rows)} rows. Preview: {result[:200]}")
+        return result
+
+    except httpx.ConnectError as e:
+        return f"DATABASE CONNECTION FAILED: Could not reach {base_url}. Detail: {e}"
+    except httpx.TimeoutException:
+        return "DATABASE CONNECTION FAILED: Query timed out after 30 seconds."
+    except Exception as exc:
+        traceback.print_exc()
+        return f"DATABASE CONNECTION FAILED: {type(exc).__name__}: {exc}"
+
+
+# =============================================================================
+# Startup event — discover schema and build system prompt
+# =============================================================================
+
+@app.on_event("startup")
+async def on_startup():
+    global _SYSTEM_PROMPT
+    discover_schema()
+    _SYSTEM_PROMPT = _build_system_prompt()
+    print("🚀 System prompt built with live schema.")
+    print(_SYSTEM_PROMPT[:800])
+
+
+# =============================================================================
+# Claude tool definition
+# =============================================================================
+
 _QUERY_TOOL = {
     "name": "query_clickhouse",
     "description": (
-        "Execute a SELECT query against the ClickHouse deals table. "
-        "Use for any question about deals, pipeline value, win/loss rates, regions, "
-        "industries, owners, stages, or any data metric. "
-        "Always follow SELECT-only rule and LIMIT row queries to 100. "
-        "Relay DATABASE CONNECTION FAILED or ERROR: messages directly to the user."
+        "Execute a SELECT query against ClickHouse. "
+        "Use for any question about deals, pipeline, win/loss, regions, owners, stages, metrics. "
+        "ALWAYS use fully-qualified table names (database.table). "
+        "If the result starts with DATABASE CONNECTION FAILED or ERROR: relay it to the user."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "sql": {
                 "type": "string",
-                "description": "A valid SELECT or WITH query against the deals table.",
+                "description": (
+                    "A valid ClickHouse SELECT or WITH query. "
+                    "Use the exact database.table name from the schema. "
+                    "LIMIT row queries to 100."
+                ),
             }
         },
         "required": ["sql"],
     },
 }
-
 
 # =============================================================================
 # Pydantic models
@@ -412,10 +481,7 @@ def _extract_text(content_blocks) -> str:
 
 
 def _call_claude(messages: list, max_tokens: int = 2048) -> str:
-    """
-    Run Claude with the query_clickhouse tool.
-    Executes up to 5 tool-use rounds, then returns the final text reply.
-    """
+    """Run Claude with query_clickhouse tool. Up to 5 tool rounds."""
     response = _ai_client.messages.create(
         model=_CLAUDE_MODEL,
         system=_SYSTEM_PROMPT,
@@ -433,29 +499,22 @@ def _call_claude(messages: list, max_tokens: int = 2048) -> str:
         if not tool_block:
             break
 
-        sql = tool_block.input.get("sql", "")
-        print(f"  🔄 Tool round {round_num + 1} | SQL: {sql[:120]}...")
-
+        sql          = tool_block.input.get("sql", "")
         query_result = run_clickhouse_query(sql)
-
-        is_error = any(query_result.startswith(p) for p in [
-            "DATABASE CONNECTION FAILED",
-            "ERROR:",
-            "DATABASE ERROR:",
+        is_error     = any(query_result.startswith(p) for p in [
+            "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
         ])
 
         messages = messages + [
             {"role": "assistant", "content": response.content},
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tool_block.id,
-                        "content": query_result,
-                        "is_error": is_error,
-                    }
-                ],
+                "content": [{
+                    "type":        "tool_result",
+                    "tool_use_id": tool_block.id,
+                    "content":     query_result,
+                    "is_error":    is_error,
+                }],
             },
         ]
 
@@ -469,15 +528,13 @@ def _call_claude(messages: list, max_tokens: int = 2048) -> str:
         )
 
     reply = _extract_text(response.content)
-
     if not reply:
         reply = (
             "⚠️ No response was generated.\n\n"
-            "This usually means the ClickHouse connection failed before Claude could answer. "
-            "Open **/debug/db** to diagnose the connection, then verify "
-            "`CLICKHOUSE_API_URL` and `CLICKHOUSE_API_TOKEN` in `.env` and restart."
+            "This usually means the ClickHouse query failed. "
+            "Open **/debug/db** to diagnose, then verify `CLICKHOUSE_API_URL` "
+            "and `CLICKHOUSE_API_TOKEN` in `.env` and restart."
         )
-
     return reply
 
 
@@ -493,10 +550,7 @@ def root():
 
 @app.get("/debug/db")
 def debug_db():
-    """
-    Connectivity diagnostic. Open in browser: http://localhost:8000/debug/db
-    Tests every relevant endpoint on your ClickHouse HTTP proxy.
-    """
+    """Full connectivity + schema diagnostic. Open: http://localhost:8000/debug/db"""
     base_url = _base_url()
     token    = _token()
 
@@ -509,49 +563,59 @@ def debug_db():
         return {
             "status": "MISCONFIGURED",
             "config": config,
-            "fix": (
-                "Add these to your .env file and restart:\n"
-                "  CLICKHOUSE_API_URL=https://clickhouse-api-j55l.onrender.com\n"
-                "  CLICKHOUSE_API_TOKEN=your_token_here"
-            ),
+            "fix": "Add CLICKHOUSE_API_URL and CLICKHOUSE_API_TOKEN to .env, then restart.",
         }
 
-    results = {}
+    tests = {}
 
-    # Test 1: health check (unauthenticated GET /)
+    # Health check
     try:
         r = httpx.get(base_url, timeout=10)
-        results["GET /"] = {"status": r.status_code, "body": r.text[:200]}
+        tests["GET /"] = {"status": r.status_code, "body": r.text[:200]}
     except Exception as e:
-        results["GET /"] = {"error": str(e)}
+        tests["GET /"] = {"error": str(e)}
 
-    # Test 2: list databases (authenticated)
+    # List databases
     try:
         r = httpx.get(f"{base_url}/databases", headers=_auth_headers(), timeout=10)
-        results["GET /databases"] = {"status": r.status_code, "body": r.text[:300]}
+        tests["GET /databases"] = {"status": r.status_code, "body": r.text[:400]}
     except Exception as e:
-        results["GET /databases"] = {"error": str(e)}
+        tests["GET /databases"] = {"error": str(e)}
 
-    # Test 3: actual query — SELECT 1
-    ping_result = run_clickhouse_query("SELECT 1 AS ping")
-    query_ok = not any(ping_result.startswith(p) for p in [
+    # Ping query
+    ping = run_clickhouse_query("SELECT 1 AS ping")
+    query_ok = not any(ping.startswith(p) for p in [
         "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
     ])
-    results["POST /query (SELECT 1)"] = {"result": ping_result, "ok": query_ok}
+    tests["POST /query (SELECT 1)"] = {"result": ping, "ok": query_ok}
 
     return {
-        "status":  "OK" if query_ok else "FAILED",
-        "config":  config,
-        "tests":   results,
+        "status":           "OK" if query_ok else "FAILED",
+        "config":           config,
+        "discovered_tables": list(_LIVE_SCHEMA.keys()),
+        "tests":            tests,
         "recommendation": (
-            "✅ Database connected. Chat is ready."
+            "✅ DB connected. Schema loaded. Chat is ready."
             if query_ok else
-            "❌ Query test failed. Check the 'POST /query' result above for the exact error.\n"
+            "❌ Query test failed. See 'POST /query' result for the exact error.\n"
             "Common causes:\n"
-            "  • Wrong token → 401 Unauthorized\n"
-            "  • Wrong URL   → ConnectError or 404\n"
-            "  • Proxy down  → ConnectError or 503"
+            "  401 → wrong token\n"
+            "  ConnectError → wrong URL or proxy down\n"
+            "  500 → SQL error (wrong table/column)"
         ),
+    }
+
+
+@app.post("/refresh-schema")
+def refresh_schema():
+    """Re-discover schema from the proxy and rebuild the system prompt."""
+    global _SYSTEM_PROMPT
+    schema = discover_schema()
+    _SYSTEM_PROMPT = _build_system_prompt()
+    return {
+        "status":  "refreshed",
+        "tables":  list(_LIVE_SCHEMA.keys()),
+        "schema":  schema[:2000],
     }
 
 
@@ -559,14 +623,12 @@ def debug_db():
 def chat(payload: ChatRequest):
     messages = [{"role": m.role, "content": m.content} for m in payload.history]
     messages.append({"role": "user", "content": payload.message})
-
     print(f"💬 [chat] {payload.message[:100]}")
     try:
         reply = _call_claude(messages)
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Claude error: {exc}")
-
     print(f"✅ [chat] {len(reply)} chars")
     return {"reply": reply}
 
@@ -579,17 +641,16 @@ def export_pdf(payload: ExportRequest):
     )
     prompt = (
         f"Based on this conversation, write a structured deals intelligence report "
-        f"titled '{payload.title}'. Use these exact ## section headers:\n"
+        f"titled '{payload.title}'. Use these ## section headers:\n"
         "## Executive Summary\n## Pipeline Overview\n## Key Metrics\n"
         "## Regional Breakdown\n## Win / Loss Analysis\n## Recommendations\n\n"
-        "Query the database for any missing numbers. Be data-driven.\n\n"
+        "Query the database for any missing numbers.\n\n"
         f"CONVERSATION:\n{conv_text}"
     )
     try:
         report_text = _call_claude([{"role": "user", "content": prompt}], max_tokens=3000)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
-
     pdf_bytes = _build_pdf(payload.title, report_text)
     filename  = re.sub(r"[^\w\-]", "_", payload.title) + ".pdf"
     return StreamingResponse(
@@ -605,18 +666,17 @@ def export_pptx(payload: ExportRequest):
         for m in payload.conversation
     )
     prompt = (
-        f"Based on this conversation, write slide content for a presentation titled '{payload.title}'.\n"
+        f"Based on this conversation, write slide content for '{payload.title}'.\n"
         "Output each slide as:\nSLIDE: <Title>\nBULLETS:\n- bullet 1\n- bullet 2\n\n"
-        "Include: Title/Overview, Pipeline Health, Key Metrics, Regional Breakdown, "
+        "Include: Overview, Pipeline Health, Key Metrics, Regional Breakdown, "
         "Win/Loss Analysis, Recommendations.\n"
-        "Query the database for any missing data. Keep bullets crisp.\n\n"
+        "Query DB for any missing data.\n\n"
         f"CONVERSATION:\n{conv_text}"
     )
     try:
         slide_text = _call_claude([{"role": "user", "content": prompt}], max_tokens=3000)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
-
     pptx_bytes = _build_pptx(payload.title, slide_text)
     filename   = re.sub(r"[^\w\-]", "_", payload.title) + ".pptx"
     return StreamingResponse(
@@ -672,15 +732,14 @@ def _pdf_styles():
                                        textColor=colors.HexColor("#B0BEC5"), fontName="Helvetica"),
         "Section_H":   ParagraphStyle("Section_H",   fontSize=11, leading=15,
                                        textColor=_C_WHITE, fontName="Helvetica-Bold"),
-        "Body":        ParagraphStyle("Body",   fontSize=9,  leading=14,
-                                       textColor=_C_TXT, fontName="Helvetica", spaceAfter=4),
-        "Bullet":      ParagraphStyle("Bullet", fontSize=9,  leading=14,
-                                       textColor=_C_TXT, fontName="Helvetica",
-                                       leftIndent=12, firstLineIndent=-8, spaceAfter=3),
-        "H2":          ParagraphStyle("H2",  fontSize=11, leading=15, textColor=_C_NAVY,
-                                       fontName="Helvetica-Bold", spaceBefore=10, spaceAfter=4),
-        "H3":          ParagraphStyle("H3",  fontSize=9,  leading=13, textColor=_C_BLUE,
-                                       fontName="Helvetica-Bold", spaceBefore=6, spaceAfter=2),
+        "Body":   ParagraphStyle("Body",   fontSize=9, leading=14, textColor=_C_TXT,
+                                  fontName="Helvetica", spaceAfter=4),
+        "Bullet": ParagraphStyle("Bullet", fontSize=9, leading=14, textColor=_C_TXT,
+                                  fontName="Helvetica", leftIndent=12, firstLineIndent=-8, spaceAfter=3),
+        "H2": ParagraphStyle("H2", fontSize=11, leading=15, textColor=_C_NAVY,
+                               fontName="Helvetica-Bold", spaceBefore=10, spaceAfter=4),
+        "H3": ParagraphStyle("H3", fontSize=9,  leading=13, textColor=_C_BLUE,
+                               fontName="Helvetica-Bold", spaceBefore=6, spaceAfter=2),
     }
 
 
@@ -694,8 +753,8 @@ def _parse_sections(text: str):
 
 
 def _build_pdf(title: str, report_text: str) -> bytes:
-    buf     = io.BytesIO()
-    styles  = _pdf_styles()
+    buf      = io.BytesIO()
+    styles   = _pdf_styles()
     sections = _parse_sections(report_text)
 
     def _on_page(canvas, doc):
@@ -709,8 +768,10 @@ def _build_pdf(title: str, report_text: str) -> bytes:
         canvas.rect(0, 0, PW, _FTR_H + _MB, fill=1, stroke=0)
         canvas.setFillColor(_C_DIM)
         canvas.setFont("Helvetica", 7)
-        footer = f"DIUD Report  |  AI-Generated  |  CONFIDENTIAL  |  {date.today().strftime('%B %Y')}"
-        canvas.drawCentredString(PW / 2, _MB + 5, footer)
+        canvas.drawCentredString(
+            PW / 2, _MB + 5,
+            f"DIUD Report  |  AI-Generated  |  CONFIDENTIAL  |  {date.today().strftime('%B %Y')}"
+        )
         canvas.drawRightString(PW - _MR, _MB + 5, f"Page {canvas.getPageNumber()}")
         canvas.restoreState()
 
@@ -730,7 +791,6 @@ def _build_pdf(title: str, report_text: str) -> bytes:
     for sec_title, sec_body in sections:
         color_key = next((k for k in _SECTION_COLORS if k in sec_title.lower()), None)
         bar_color = _SECTION_COLORS.get(color_key, _C_BLUE)
-
         story.append(Table(
             [[Paragraph(sec_title.upper(), styles["Section_H"])]],
             colWidths=[_CW],
@@ -742,7 +802,6 @@ def _build_pdf(title: str, report_text: str) -> bytes:
             ])
         ))
         story.append(Spacer(1, 6))
-
         for line in sec_body.split("\n"):
             line = line.strip()
             if not line:
@@ -755,7 +814,6 @@ def _build_pdf(title: str, report_text: str) -> bytes:
                 story.append(Paragraph("• " + _strip_md(line[2:]), styles["Bullet"]))
             else:
                 story.append(Paragraph(_strip_md(line), styles["Body"]))
-
         story.extend([Spacer(1, 12), PageBreak()])
 
     doc.build(story)
@@ -784,38 +842,24 @@ _SLIDE_ACCENT = {
     "recommend": RGBColor(0x1B, 0x5E, 0x20),
 }
 
-SLIDE_W = Inches(13.33)
-SLIDE_H = Inches(7.5)
-
 
 def _pptx_bg(slide, color):
-    fill = slide.background.fill
-    fill.solid()
-    fill.fore_color.rgb = color
-
+    f = slide.background.fill; f.solid(); f.fore_color.rgb = color
 
 def _pptx_rect(slide, l, t, w, h, color):
     shp = slide.shapes.add_shape(1, Inches(l), Inches(t), Inches(w), Inches(h))
-    shp.fill.solid()
-    shp.fill.fore_color.rgb = color
-    shp.line.fill.background()
+    shp.fill.solid(); shp.fill.fore_color.rgb = color; shp.line.fill.background()
     return shp
-
 
 def _pptx_txt(slide, text, l, t, w, h, bold=False, size=18, color=None, align=PP_ALIGN.LEFT):
     txb = slide.shapes.add_textbox(Inches(l), Inches(t), Inches(w), Inches(h))
     txb.word_wrap = True
-    tf = txb.text_frame
-    tf.word_wrap = True
-    p = tf.paragraphs[0]
-    p.alignment = align
-    run = p.add_run()
-    run.text = text
-    run.font.size  = Pt(size)
-    run.font.bold  = bold
+    tf = txb.text_frame; tf.word_wrap = True
+    p = tf.paragraphs[0]; p.alignment = align
+    run = p.add_run(); run.text = text
+    run.font.size = Pt(size); run.font.bold = bold
     run.font.color.rgb = color or _C_TXT_P
     return txb
-
 
 def _parse_slides(text: str):
     slides, cur_title, cur_bullets = [], None, []
@@ -831,29 +875,22 @@ def _parse_slides(text: str):
         slides.append((cur_title, cur_bullets))
     return slides
 
-
 def _build_pptx(title: str, slide_text: str) -> bytes:
     slides_data = _parse_slides(slide_text) or [(title, [slide_text[:400]])]
-
     prs = Presentation()
-    prs.slide_width  = SLIDE_W
-    prs.slide_height = SLIDE_H
-
+    prs.slide_width = Inches(13.33); prs.slide_height = Inches(7.5)
     footer_text = f"DIUD  |  AI-Generated  |  CONFIDENTIAL  |  {date.today().strftime('%B %Y')}"
     blank = prs.slide_layouts[6]
 
-    def _footer(slide):
-        _pptx_rect(slide, 0, 7.1, 13.33, 0.4, _C_DNAV_P)
-        _pptx_txt(slide, footer_text, 0.3, 7.12, 12, 0.35,
-                  size=7, color=_C_DIM_P, align=PP_ALIGN.CENTER)
+    def _footer(s):
+        _pptx_rect(s, 0, 7.1, 13.33, 0.4, _C_DNAV_P)
+        _pptx_txt(s, footer_text, 0.3, 7.12, 12, 0.35, size=7, color=_C_DIM_P, align=PP_ALIGN.CENTER)
 
-    def _accent(t_lower):
+    def _accent(t):
         for k, c in _SLIDE_ACCENT.items():
-            if k in t_lower:
-                return c
+            if k in t: return c
         return _C_BLUE_P
 
-    # Cover slide
     cover = prs.slides.add_slide(blank)
     _pptx_bg(cover, _C_NAVY_P)
     _pptx_rect(cover, 0, 3.2, 13.33, 0.06, _C_BLUE_P)
@@ -863,40 +900,26 @@ def _build_pptx(title: str, slide_text: str) -> bytes:
     _pptx_txt(cover, f"Generated: {date.today().strftime('%B %d, %Y')}", 0.8, 3.6, 6, 0.45,
               size=12, color=RGBColor(0x78, 0x90, 0x9C))
 
-    # Content slides
     for i, (s_title, bullets) in enumerate(slides_data):
-        slide  = prs.slides.add_slide(blank)
-        accent = _accent(s_title.lower())
+        slide = prs.slides.add_slide(blank)
+        ac = _accent(s_title.lower())
         _pptx_bg(slide, _C_LTBG_P)
-        _pptx_rect(slide, 0, 0, 13.33, 0.9, accent)
-        _pptx_txt(slide, s_title.upper(), 0.35, 0.1, 12.5, 0.7,
-                  bold=True, size=18, color=_C_WHITE_P)
-        _pptx_txt(slide, str(i + 1), 12.5, 0.12, 0.6, 0.6,
-                  size=11, color=_C_WHITE_P, align=PP_ALIGN.RIGHT)
+        _pptx_rect(slide, 0, 0, 13.33, 0.9, ac)
+        _pptx_txt(slide, s_title.upper(), 0.35, 0.1, 12.5, 0.7, bold=True, size=18, color=_C_WHITE_P)
+        _pptx_txt(slide, str(i+1), 12.5, 0.12, 0.6, 0.6, size=11, color=_C_WHITE_P, align=PP_ALIGN.RIGHT)
         _pptx_rect(slide, 0.3, 1.0, 12.73, 5.9, _C_WHITE_P)
-
         if bullets:
             txb = slide.shapes.add_textbox(Inches(0.5), Inches(1.1), Inches(12.3), Inches(5.6))
             txb.word_wrap = True
-            tf = txb.text_frame
-            tf.word_wrap = True
+            tf = txb.text_frame; tf.word_wrap = True
             for j, bullet in enumerate(bullets[:12]):
                 p = tf.add_paragraph() if j > 0 else tf.paragraphs[0]
                 p.space_before = Pt(4)
-                dot = p.add_run()
-                dot.text = "●  "
-                dot.font.size = Pt(8)
-                dot.font.color.rgb = accent
-                run = p.add_run()
-                run.text = bullet
-                run.font.size = Pt(12)
-                run.font.color.rgb = _C_TXT_P
+                dot = p.add_run(); dot.text = "●  "; dot.font.size = Pt(8); dot.font.color.rgb = ac
+                run = p.add_run(); run.text = bullet; run.font.size = Pt(12); run.font.color.rgb = _C_TXT_P
         else:
-            _pptx_txt(slide, "No data available.", 0.5, 1.2, 12, 0.5,
-                      size=11, color=_C_DIM_P)
-
+            _pptx_txt(slide, "No data available.", 0.5, 1.2, 12, 0.5, size=11, color=_C_DIM_P)
         _footer(slide)
 
-    buf = io.BytesIO()
-    prs.save(buf)
+    buf = io.BytesIO(); prs.save(buf)
     return buf.getvalue()
