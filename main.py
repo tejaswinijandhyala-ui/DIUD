@@ -1,5 +1,15 @@
 # =============================================================================
-# Imports
+# DIUD — Decision Intelligence Using Data
+# FastAPI backend: Claude + ClickHouse HTTP proxy + PDF/PPTX export
+#
+# Your ClickHouse proxy (OpenAPI spec confirmed):
+#   POST /query   body: {"query": "<SQL>", "limit": <int|null>}
+#   Authorization: Bearer <token>
+#
+# ENV variables needed in .env:
+#   ANTHROPIC_API_KEY=sk-ant-...
+#   CLICKHOUSE_API_URL=https://clickhouse-api-j55l.onrender.com
+#   CLICKHOUSE_API_TOKEN=your_bearer_token_here
 # =============================================================================
 
 import io
@@ -10,14 +20,13 @@ import traceback
 from datetime import date
 from typing import List, Literal
 
+import httpx
+import anthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
-import anthropic
-import clickhouse_connect
 
 from pptx import Presentation
 from pptx.dml.color import RGBColor
@@ -25,7 +34,6 @@ from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
@@ -33,7 +41,6 @@ from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
     PageTemplate,
-    HRFlowable,
     PageBreak,
     Paragraph,
     Spacer,
@@ -51,11 +58,7 @@ load_dotenv()
 # FastAPI App
 # =============================================================================
 
-app = FastAPI(
-    title="DIUD",
-    description="Decision Intelligence Using Data",
-    version="3.0.0",
-)
+app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -66,525 +69,322 @@ app.add_middleware(
 )
 
 # =============================================================================
-# Claude
+# Claude client
 # =============================================================================
 
-_ai_client = anthropic.Anthropic(
-    api_key=os.getenv("ANTHROPIC_API_KEY")
-)
-
-_CLAUDE_MODEL = "claude-opus-4-5"
+_ai_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+_CLAUDE_MODEL = "claude-sonnet-4-5"
 
 # =============================================================================
-# ClickHouse Direct Client
+# ClickHouse HTTP proxy connector
+#
+# Confirmed from your OpenAPI spec:
+#   POST /query
+#   Request body (QueryRequest schema):
+#     { "query": "<SQL string>", "limit": <integer or null> }
+#   Auth: Bearer token via HTTPBearer
+#
+# Other available endpoints (no query body needed):
+#   GET  /databases              → list all databases
+#   GET  /tables/{database}      → list tables in a database
+#   GET  /schema/{database}/{table} → get column schema for a table
 # =============================================================================
 
-_clickhouse_client = clickhouse_connect.get_client(
-    host=os.getenv("CLICKHOUSE_HOST"),
-    port=int(os.getenv("CLICKHOUSE_PORT", 8443)),
-    username=os.getenv("CLICKHOUSE_USER"),
-    password=os.getenv("CLICKHOUSE_PASSWORD"),
-    database=os.getenv("CLICKHOUSE_DB"),
-    secure=True
-)
+def _base_url() -> str:
+    return (os.getenv("CLICKHOUSE_API_URL") or "").rstrip("/")
 
-# =============================================================================
-# ClickHouse Query Runner
-# =============================================================================
+def _token() -> str:
+    return os.getenv("CLICKHOUSE_API_TOKEN") or ""
 
-FORBIDDEN_SQL = [
-    "INSERT",
-    "UPDATE",
-    "DELETE",
-    "DROP",
-    "ALTER",
-    "TRUNCATE",
-    "CREATE",
-]
+def _auth_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {_token()}",
+        "Content-Type": "application/json",
+    }
+
+FORBIDDEN_KEYWORDS = ["INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE"]
+
 
 def run_clickhouse_query(sql: str) -> str:
+    """
+    Execute a SELECT/WITH query via POST /query on your ClickHouse HTTP proxy.
+    Body: {"query": "<SQL>"}   (field name is "query", NOT "sql" — confirmed from OpenAPI spec)
+    Returns a plain-text table string, or an error message starting with ERROR:/DATABASE.
+    Never raises — always returns a string so Claude can report failures gracefully.
+    """
+    base_url = _base_url()
+    token    = _token()
+
+    if not base_url:
+        return (
+            "DATABASE CONNECTION FAILED: CLICKHOUSE_API_URL is not set. "
+            "Add it to your .env file and restart. Example:\n"
+            "CLICKHOUSE_API_URL=https://clickhouse-api-j55l.onrender.com"
+        )
+    if not token:
+        return (
+            "DATABASE CONNECTION FAILED: CLICKHOUSE_API_TOKEN is not set. "
+            "Add your Bearer token to .env and restart."
+        )
+
+    # Safety check — only allow read queries
+    stripped = sql.strip().upper()
+    if not (stripped.startswith("SELECT") or stripped.startswith("WITH")):
+        return "ERROR: Only SELECT/WITH queries are permitted."
+    for kw in FORBIDDEN_KEYWORDS:
+        if re.search(rf'\b{kw}\b', stripped):
+            return f"ERROR: Forbidden SQL keyword detected: {kw}"
+
+    print(f"🔍 SQL → POST {base_url}/query")
+    print(f"   {sql[:300]}")
 
     try:
+        resp = httpx.post(
+            f"{base_url}/query",
+            headers=_auth_headers(),
+            # ⚠️  Field name MUST be "query" per your OpenAPI QueryRequest schema
+            json={"query": sql},
+            timeout=30,
+        )
 
-        stripped = sql.strip().upper()
+        # Handle HTTP errors clearly
+        if resp.status_code == 401:
+            return "DATABASE CONNECTION FAILED: 401 Unauthorized — check your CLICKHOUSE_API_TOKEN."
+        if resp.status_code == 403:
+            return "DATABASE CONNECTION FAILED: 403 Forbidden — token may not have read permission."
+        if resp.status_code == 422:
+            # Validation error from the proxy — log detail for debugging
+            detail = resp.text[:500]
+            print(f"   422 detail: {detail}")
+            return f"ERROR: Query was rejected by the proxy (422 Unprocessable Entity). Detail: {detail}"
+        if resp.status_code != 200:
+            return f"DATABASE ERROR: HTTP {resp.status_code} — {resp.text[:400]}"
 
-        if not (
-            stripped.startswith("SELECT")
-            or stripped.startswith("WITH")
-        ):
-            return (
-                "ERROR: Only SELECT/WITH queries are allowed."
+        # Parse the response
+        payload = resp.json()
+        print(f"   Response type: {type(payload).__name__}, keys: {list(payload.keys()) if isinstance(payload, dict) else 'list'}")
+
+        # Handle different response shapes the proxy might return
+        if isinstance(payload, list):
+            # Direct list of row dicts
+            rows = payload
+        elif isinstance(payload, dict):
+            # Try common wrapper keys
+            rows = (
+                payload.get("data")
+                or payload.get("rows")
+                or payload.get("result")
+                or payload.get("results")
+                or None
             )
-
-        for keyword in FORBIDDEN_SQL:
-            if keyword in stripped:
-                return f"ERROR: Forbidden SQL keyword detected: {keyword}"
-
-        # Remove risky FINAL keyword automatically
-        sql = sql.replace(" FINAL", "")
-
-        print("🔍 RUNNING SQL:")
-        print(sql)
-
-        result = _clickhouse_client.query(sql)
-
-        columns = result.column_names
-        rows = result.result_rows
+            if rows is None:
+                # Unknown shape — return raw so Claude can interpret
+                return json.dumps(payload, indent=2, default=str)[:3000]
+        else:
+            return f"Unexpected response type: {type(payload)}"
 
         if not rows:
             return "Query returned 0 rows."
 
-        header = " | ".join(columns)
-
-        lines = [
-            header,
-            "-" * min(len(header), 140)
-        ]
-
-        for row in rows[:100]:
-
-            lines.append(
-                " | ".join(
-                    str(v) if v is not None else "NULL"
-                    for v in row
-                )
-            )
+        # Build a readable text table
+        if isinstance(rows[0], dict):
+            cols   = list(rows[0].keys())
+            header = " | ".join(cols)
+            sep    = "-" * min(len(header), 140)
+            lines  = [header, sep]
+            for row in rows[:100]:
+                lines.append(" | ".join(str(row.get(c, "NULL")) for c in cols))
+        else:
+            # List of lists
+            lines = [" | ".join(str(v) for v in rows[0]), "-" * 80]
+            for row in rows[1:101]:
+                lines.append(" | ".join(str(v) for v in row))
 
         if len(rows) > 100:
-            lines.append(
-                f"... ({len(rows) - 100} more rows)"
-            )
+            lines.append(f"... ({len(rows) - 100} more rows not shown)")
 
-        return "\n".join(lines)
+        result = "\n".join(lines)
+        print(f"   ✅ {len(rows)} rows returned. Preview: {result[:200]}")
+        return result
 
-    except Exception as e:
-
-        traceback.print_exc()
-
+    except httpx.ConnectError as e:
         return (
-            "DATABASE ERROR:\n\n"
-            f"{str(e)}"
+            f"DATABASE CONNECTION FAILED: Could not reach {base_url}. "
+            f"Check that the URL is correct and the service is running.\nDetail: {e}"
         )
+    except httpx.TimeoutException:
+        return "DATABASE CONNECTION FAILED: Query timed out after 30 seconds."
+    except Exception as exc:
+        traceback.print_exc()
+        return f"DATABASE CONNECTION FAILED: {type(exc).__name__}: {exc}"
+
+
+# =============================================================================
+# Helper: introspect schema via the proxy's /schema endpoint
+# =============================================================================
+
+def get_table_schema(database: str, table: str) -> dict:
+    """Fetch column definitions from GET /schema/{database}/{table}."""
+    base_url = _base_url()
+    token    = _token()
+    if not base_url or not token:
+        return {"error": "API URL or token not configured"}
+    try:
+        resp = httpx.get(
+            f"{base_url}/schema/{database}/{table}",
+            headers=_auth_headers(),
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        return {"error": f"HTTP {resp.status_code}: {resp.text[:300]}"}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 # =============================================================================
 # System Prompt
 # =============================================================================
-#
-# Customise the sections marked TODO to match your exact database, business
-# logic, and KPI definitions before deploying.
-#
-_SYSTEM_PROMPT = """
-You are PipeGen Chat — a conversational pipeline intelligence assistant for Kore.ai.
-You have DIRECT, LIVE access to the ClickHouse database via the query_clickhouse tool.
 
-RULES:
+_SYSTEM_PROMPT = """
+You are DIUD (Decision Intelligence Using Data) — a conversational data assistant.
+You have LIVE access to a ClickHouse database via the query_clickhouse tool.
+
+CORE RULES:
 - NEVER say you lack database access. You always have it via the tool.
 - NEVER fabricate numbers. Query the DB for every metric question.
-- NEVER run destructive SQL (no INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE).
-- ALWAYS report database errors clearly. If a query fails, tell the user the exact error
-  and suggest they visit /debug/clickhouse to diagnose connectivity.
-- Answer in clean markdown: use tables for data, bold for KPIs.
-- Be concise but complete. If asked for a summary, give one; if asked for a list, list it.
-- When building export content (PDF/PPTX), use clear ## section headers so export
-  functions can parse them.
+- NEVER run destructive SQL (INSERT / UPDATE / DELETE / DROP / ALTER / TRUNCATE).
+- If a query fails or returns an error, report the exact error message to the user.
+- Answer in clean markdown: use tables for data, bold for key numbers.
+- Be concise but complete.
+- When generating export content, use ## section headers so the PDF/PPTX renderer can parse them.
 
 =================================================================
-CLICKHOUSE DIRECT ACCESS
+DATABASE ACCESS
 =================================================================
 
-You have a tool called query_clickhouse.
-Use it for any question about pipeline deals, AEs, regions, industries,
-stages, win/loss, competitors, conversions, or any metric not already
-in the conversation context.
-
-If the tool returns a DATABASE CONNECTION FAILED message, relay it to
-the user clearly and suggest they check /debug/clickhouse.
+Tool: query_clickhouse
+Use it for any question about deals, pipeline, metrics, win/loss, or any data.
+If it returns DATABASE CONNECTION FAILED, relay that message and tell the user
+to open /debug/db to diagnose connectivity.
 
 =================================================================
-TABLES
+TABLE SCHEMA — deals (only table in scope for now)
 =================================================================
 
-── TABLE 1: hs_analytics.deals ─────────────────────────────────
-Primary table. One row per deal.
-ALWAYS use FINAL keyword: FROM hs_analytics.deals FINAL
+TABLE: deals
+One row per deal / sales opportunity.
 
-KEY COLUMNS:
-  deal_id                    STRING  — unique deal identifier
-  deal_name                  STRING  — name of the deal
-  deal_owner                 STRING  — owner ID (join to hs_analytics.owners on o.id)
-  deal_stage                 STRING  — current stage (see STAGE LIST below)
-  deal_type                  STRING  — deal type (NULL = 'Not Assigned')
-  pipeline                   STRING  — always filter: pipeline = 'default'
-  amount                     FLOAT   — deal value in USD
-  region                     STRING  — raw values (see REGION MAP below)
-  deal_source_rollup         STRING  — raw source (see SOURCE MAP below)
-  20_snapshot_deal_source_rollup  STRING — source at time of 20% qualification
-  ai_for_x                   STRING  — AI use case category
-  kore_primary_industry      STRING  — raw industry (see INDUSTRY MAP below)
-  account_priority_level     STRING  — 'P1','P2'...'P10' (raw, not grouped)
-  hubspot_team               STRING  — team ID (join to kore_ai_hubspot.gs_Teams)
+COLUMNS:
+  id              INTEGER   — unique deal identifier
+  name            STRING    — deal / opportunity name
+  stage           STRING    — current pipeline stage (see STAGE LIST below)
+  owner           STRING    — AE / deal owner name
+  amount          FLOAT     — deal value in USD
+  region          STRING    — geographic region
+  source          STRING    — lead source
+  industry        STRING    — customer industry vertical
+  close_date      DATE      — expected or actual close date
+  created_date    DATE      — date deal was created
+  status          STRING    — 'open', 'won', 'lost'
+  lost_reason     STRING    — reason for loss (NULL if not lost)
+  won_reason      STRING    — reason for win (NULL if not won)
+  competitor      STRING    — competitor involved (NULL if none)
+  notes           STRING    — freeform notes
 
-  -- DATE COLUMNS (stored as strings; always cast to DATE before comparison)
-  create_date                STRING  — deal creation date
-  close_date                 STRING  — expected/actual close date
-  became_5_deal_date         STRING  — entered 5% IQM Held
-  became_10_deal_date        STRING  — entered 10% Discovery
-  became_20_deal_date        STRING  — entered 20% Solution
-  became_30_deal_date        STRING  — entered 30% Proof
-  became_40_deal_date        STRING  — entered 40% Proposal
-  became_60_deal_date        STRING  — entered 60% Price Negotiation
-  became_75_deal_date        STRING  — entered 75% Contract Review
-  last_contacted             STRING  — last contact date
-
-  -- QUALIFICATION FIELDS
-  is_there_a_confirmation_of_budget  STRING  — 'Yes'/'No'
-  who_is_the_decision_maker          STRING  — decision maker name
-  use_case                           STRING  — use case description
-  what_is_the_estimated_timeline     STRING  — timeline string
-  is_this_a_deal_with_inception      STRING  — 'Yes'/'No'
-
-  -- WIN/LOSS FIELDS
-  primary_closed_won_reason_         STRING  — win reason
-  primary_closed_lost_reason         STRING  — loss reason
-  won_loss_notes                     STRING  — freeform notes
-  competitors                        STRING  — competitor names
-  competition                        STRING  — competition notes
-
-  -- DEAL APPROVAL FIELDS
-  cs_deal_approval_status_level_1      STRING
-  cs_deal_approval_status_level_2      STRING
-  direct_deal_approval_status_level_1  STRING
-  direct_deal_approval_status_level_2  STRING
-  deal_approval_status_level_1         STRING
-  deal_approval_status_level_2         STRING
-  deal_approval_status_level_3_cs_only STRING
-
-── TABLE 2: hs_analytics.owners ─────────────────────────────────
-ALWAYS use FINAL: FROM hs_analytics.owners FINAL
-
-  id           STRING  — owner ID (join key to deals.deal_owner)
-  firstName    STRING  — first name
-  lastName     STRING  — last name
-  email        STRING  — owner email
-
-── TABLE 3: hs_analytics.companies ──────────────────────────────
-ALWAYS use FINAL: FROM hs_analytics.companies FINAL
-
-  company_id   STRING  — unique company ID
-  name         STRING  — company name
-  domain       STRING  — website domain
-  industry     STRING  — company industry
-  country      STRING  — company country
-  city         STRING  — company city
-
-── HELPER TABLES ─────────────────────────────────────────────────
-  kore_ai_hubspot.gs_deal_ids_hs
-    deal_id_hs  STRING   — valid deal IDs whitelist
-
-  kore_ai_hubspot.gs_Teams
-    team_id     STRING
-    name        STRING
+⚠️  Replace these columns with your REAL deals table column names before deploying.
+    You can fetch the actual schema using GET /schema/{database}/{table} on the proxy.
 
 =================================================================
-MANDATORY BASE FILTERS (apply to EVERY deals query)
+STAGE LIST
 =================================================================
-Always include ALL three in every query on hs_analytics.deals:
-
-  WHERE pipeline = 'default'
-  AND CASE WHEN deal_type IS NULL THEN 'Not Assigned' ELSE deal_type END
-      NOT IN ('Partner-Led SMB')
-  AND toInt64(deal_id) IN (
-      SELECT DISTINCT toInt64(deal_id_hs)
-      FROM kore_ai_hubspot.gs_deal_ids_hs
-  )
-
-=================================================================
-FISCAL YEAR CALCULATION
-=================================================================
-Kore.ai fiscal year runs April → March.
-FY27 = Apr 2026 – Mar 2027   (result = 2027)
-FY26 = Apr 2025 – Mar 2026   (result = 2026)
-
-Macro (replace <date_col> with the relevant column):
-  toYear(toDate(LEFT(coalesce(<date_col>,'1900-01-01'),10)))
-  + if(toMonth(toDate(LEFT(coalesce(<date_col>,'1900-01-01'),10))) >= 4, 1, 0)
-
-FY27 5%  cohort → became_5_deal_date  >= '2026-04-01'
-FY27 20% cohort → became_20_deal_date >= '2026-04-01'
-FY26 5%  cohort → became_5_deal_date  >= '2025-04-01' AND < '2026-04-01'
-
-=================================================================
-COMPUTED COLUMNS — use inline in queries
-=================================================================
-
--- Owner full name (requires LEFT JOIN to owners):
-  concat(o.firstName, ' ', o.lastName) AS deal_owner_name
-
--- Region display mapping:
-  CASE
-    WHEN d.region = 'japac'       THEN 'JAPAC'
-    WHEN d.region = 'Africa'      THEN 'Middle East'
-    WHEN d.region = 'india___sea' THEN 'ISEA'
-    ELSE d.region
-  END AS region
-
-  RAW → DISPLAY:
-    'japac'        → 'JAPAC'
-    'Africa'       → 'Middle East'
-    'india___sea'  → 'ISEA'
-    Others unchanged: 'North America', 'EMEA', 'APAC', 'India', 'Latin America'
-
--- Deal source mapping:
-  CASE
-    WHEN d.deal_source_rollup IN ('Executive Outreach','Investor') THEN 'Executive Outreach'
-    WHEN d.deal_source_rollup IN ('BDR Outbound')                  THEN 'BDR'
-    WHEN d.deal_source_rollup IN ('Partner')                       THEN 'Partner - Non Hyperscaler'
-    WHEN d.deal_source_rollup IN ('Marketing','Customer Success',
-         'AE Outbound','Inception','Hyperscaler')                  THEN d.deal_source_rollup
-    ELSE 'Other'
-  END AS deal_source
-
--- Industry mapping:
-  CASE
-    WHEN d.kore_primary_industry IN ('Financial Services','Banking','Insurance')
-         THEN 'Financial Services'
-    WHEN d.kore_primary_industry IN ('Manufacturing Discreet','Manufacturing Process','CPG')
-         THEN 'Manufacturing'
-    WHEN d.kore_primary_industry IN ('Hi-Tech','Telecom / Media / Entertainment')
-         THEN 'TMT'
-    WHEN d.kore_primary_industry IS NULL
-      OR d.kore_primary_industry IN ('Business Services','Government','Energy & Utilities',
-         'Education','Restaurants','null','Energy')
-         THEN 'Other'
-    ELSE d.kore_primary_industry
-  END AS industry
-
--- Stage category:
-  CASE
-    WHEN d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-         '60% - Price Negotiation','75% - Contract Review')
-         THEN 'Active Pipeline'
-    WHEN d.deal_stage IN ('Prospect Disengaged','Closed Lost','Didn''t Qualify')
-         THEN 'Fallen Out'
-    WHEN d.deal_stage IN ('90% - Deal Desk Review','Closed Won')
-         THEN 'Closed Won'
-    ELSE 'Pre-Qualification'
-  END AS stage_category
-
--- BANT qualification:
-  CASE
-    WHEN d.is_there_a_confirmation_of_budget = 'Yes'
-     AND d.who_is_the_decision_maker IS NOT NULL
-     AND d.use_case IS NOT NULL
-     AND d.what_is_the_estimated_timeline IS NOT NULL
-    THEN 'Yes' ELSE 'No'
-  END AS BANT
-
--- Account priority grouping:
-  CASE
-    WHEN d.account_priority_level IN ('P1','P2','P3','P4') THEN 'P1-P4'
-    WHEN d.account_priority_level IN ('P5','P6','P7')      THEN 'P5-P7'
-    WHEN d.account_priority_level IN ('P8','P9','P10')     THEN 'P8-P10'
-    ELSE 'No Priority'
-  END AS acct_priority
-
--- Days in a stage (example for 10% Discovery):
-  DATE_DIFF('Day',
-    toDate(LEFT(coalesce(d.became_10_deal_date,'1900-01-01'),10)),
-    CURRENT_DATE()
-  ) AS days_in_10
-
-=================================================================
-DEAL STAGE LIST (funnel order, with velocity benchmarks)
-=================================================================
-  '1% - IQM Scheduled'       → Pre-Qualification  (target ≤ 7 days)
-  '5% - IQM Held'            → Pre-Qualification  (target ≤ 21 days)
-  '10% - Discovery'          → Pre-Qualification  (target ≤ 28 days)
-  '20% - Solution'           → Active Pipeline    (target ≤ 41 days)
-  '30% - Proof'              → Active Pipeline    (target ≤ 15 days)
-  '40% - Proposal'           → Active Pipeline    (target ≤ 29 days)
-  '60% - Price Negotiation'  → Active Pipeline    (target ≤ 27 days)
-  '75% - Contract Review'    → Active Pipeline    (target ≤ 34 days)
-  '90% - Deal Desk Review'   → Closed Won
-  'Closed Won'               → Closed Won
-  'Closed Lost'              → Fallen Out
-  "Didn't Qualify"           → Fallen Out
-  'Prospect Disengaged'      → Fallen Out
-  'Deal on Hold'             → Pre-Qualification
-
-=================================================================
-BUSINESS DEFINITIONS
-=================================================================
-"Active pipeline"   → deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-                      '60% - Price Negotiation','75% - Contract Review')
-"Qualified deals"   → became_20_deal_date <> '1900-01-01' AND became_20_deal_date IS NOT NULL
-"Fallen out"        → deal_stage IN ('Prospect Disengaged','Closed Lost','Didn''t Qualify')
-"Closed won"        → deal_stage IN ('Closed Won','90% - Deal Desk Review')
-"BANT qualified"    → all 4 BANT fields confirmed (budget, decision maker, use_case, timeline)
-"High priority"     → account_priority_level IN ('P1','P2','P3','P4')
-"FY27 5% cohort"    → became_5_deal_date >= '2026-04-01'
-"FY27 20% cohort"   → became_20_deal_date >= '2026-04-01'
-"Stalled deal"      → in active pipeline stage for > 2× the stage benchmark days
-"At-risk deal"      → closing within 30 days AND still in 20–40% stage
-"Coverage ratio"    → active pipeline value ÷ revenue target (healthy ≥ 3×)
+  'Prospecting'
+  'Qualification'
+  'Discovery'
+  'Proposal'
+  'Negotiation'
+  'Closed Won'
+  'Closed Lost'
 
 =================================================================
 QUERY RULES
 =================================================================
-1. SELECT / WITH only — never INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE
-2. Always use FINAL on all hs_analytics tables
-3. Always apply the 3 mandatory base filters on deals
-4. Always LIMIT row-level queries (max 100 rows)
-5. Use countDistinct(deal_id) for unique deal counts
-6. Use round(sum(amount)/1e6, 1) for $M dollar amounts
-7. Use ILIKE for case-insensitive text matching
-8. Dates are stored as strings — always cast: toDate(LEFT(coalesce(col,'1900-01-01'),10))
-9. Null date sentinel is '1900-01-01' — exclude with: col <> '1900-01-01' AND col IS NOT NULL
-10. Default fiscal year context is FY27 (Apr 2026 – Mar 2027) unless user specifies otherwise
+1. SELECT / WITH only — no INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE
+2. LIMIT row-level queries to 100 rows maximum
+3. Use COUNT(DISTINCT id) for unique deal counts
+4. For USD totals: ROUND(SUM(amount)/1e6, 1) gives $M figures
+5. Case-insensitive matching: use LOWER(col) = LOWER('value')  or ILIKE
+6. NULLs in display: COALESCE(col, 'Unknown')
+
+=================================================================
+BUSINESS DEFINITIONS
+=================================================================
+"Active pipeline"  → status = 'open'
+"Won deals"        → status = 'won'   OR stage = 'Closed Won'
+"Lost deals"       → status = 'lost'  OR stage = 'Closed Lost'
+"Win rate"         → won / (won + lost) * 100
+"Pipeline value"   → SUM(amount) WHERE status = 'open'
 
 =================================================================
 SAMPLE QUERIES
 =================================================================
 
--- Count + value of active pipeline (FY27 5% cohort):
-SELECT
-  countDistinct(d.deal_id) AS active_deals,
-  round(sum(d.amount)/1e6, 1) AS pipeline_m
-FROM hs_analytics.deals d FINAL
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END
-      NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-  AND d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-                       '60% - Price Negotiation','75% - Contract Review')
-  AND d.became_5_deal_date >= '2026-04-01'
+-- Deals by stage:
+SELECT stage, COUNT(DISTINCT id) AS deals, ROUND(SUM(amount)/1e6,2) AS value_m
+FROM deals
+GROUP BY stage ORDER BY value_m DESC
 
--- Count deals in each stage right now (FY27 5% cohort):
-SELECT
-  d.deal_stage,
-  countDistinct(d.deal_id) AS deal_count,
-  round(sum(d.amount)/1e6, 1) AS pipeline_m
-FROM hs_analytics.deals d FINAL
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END
-      NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-  AND d.became_5_deal_date >= '2026-04-01'
-GROUP BY d.deal_stage
-ORDER BY pipeline_m DESC
+-- Top 10 open deals:
+SELECT name, owner, stage, amount, close_date
+FROM deals WHERE status = 'open'
+ORDER BY amount DESC LIMIT 10
 
--- Top 10 deals by value with owner:
+-- Win rate by region:
 SELECT
-  d.deal_name,
-  concat(o.firstName,' ',o.lastName) AS owner,
-  CASE WHEN d.region='japac' THEN 'JAPAC' WHEN d.region='Africa' THEN 'Middle East'
-       WHEN d.region='india___sea' THEN 'ISEA' ELSE d.region END AS region,
-  d.deal_stage,
-  round(d.amount/1e6, 2) AS amt_m,
-  toDate(LEFT(coalesce(d.close_date,'1900-01-01'),10)) AS close_date
-FROM hs_analytics.deals d FINAL
-LEFT JOIN hs_analytics.owners o FINAL ON d.deal_owner = CAST(o.id AS VARCHAR)
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-  AND d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-                       '60% - Price Negotiation','75% - Contract Review')
-  AND d.became_5_deal_date >= '2026-04-01'
-ORDER BY d.amount DESC LIMIT 10
-
--- Pipeline breakdown by region (FY27):
-SELECT
-  CASE WHEN d.region='japac' THEN 'JAPAC' WHEN d.region='Africa' THEN 'Middle East'
-       WHEN d.region='india___sea' THEN 'ISEA' ELSE d.region END AS region,
-  countDistinct(d.deal_id) AS deals,
-  round(sum(d.amount)/1e6, 1) AS pipeline_m
-FROM hs_analytics.deals d FINAL
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-  AND d.became_5_deal_date >= '2026-04-01'
-  AND d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-                       '60% - Price Negotiation','75% - Contract Review')
-GROUP BY region ORDER BY pipeline_m DESC
-
--- Win rate by deal source (FY27 5% cohort):
-SELECT
-  CASE
-    WHEN d.deal_source_rollup IN ('Executive Outreach','Investor') THEN 'Executive Outreach'
-    WHEN d.deal_source_rollup IN ('BDR Outbound') THEN 'BDR'
-    WHEN d.deal_source_rollup IN ('Partner') THEN 'Partner - Non Hyperscaler'
-    ELSE coalesce(d.deal_source_rollup,'Other')
-  END AS deal_source,
-  countDistinct(CASE WHEN d.deal_stage IN ('Closed Won','90% - Deal Desk Review') THEN d.deal_id END) AS won,
-  countDistinct(CASE WHEN d.deal_stage = 'Closed Lost' THEN d.deal_id END) AS lost,
-  round(
-    countDistinct(CASE WHEN d.deal_stage IN ('Closed Won','90% - Deal Desk Review') THEN d.deal_id END) * 100.0
-    / nullIf(countDistinct(CASE WHEN d.deal_stage IN ('Closed Won','90% - Deal Desk Review','Closed Lost') THEN d.deal_id END), 0)
+  region,
+  COUNT(DISTINCT CASE WHEN status='won'  THEN id END) AS won,
+  COUNT(DISTINCT CASE WHEN status='lost' THEN id END) AS lost,
+  ROUND(
+    COUNT(DISTINCT CASE WHEN status='won' THEN id END) * 100.0
+    / NULLIF(COUNT(DISTINCT CASE WHEN status IN ('won','lost') THEN id END), 0)
   , 1) AS win_rate_pct
-FROM hs_analytics.deals d FINAL
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-  AND d.became_5_deal_date >= '2026-04-01'
-GROUP BY deal_source ORDER BY won DESC
+FROM deals
+GROUP BY region ORDER BY won DESC
 
--- BANT qualification rate across active pipeline:
-SELECT
-  countDistinct(d.deal_id) AS total_active,
-  countDistinct(CASE
-    WHEN d.is_there_a_confirmation_of_budget = 'Yes'
-     AND d.who_is_the_decision_maker IS NOT NULL
-     AND d.use_case IS NOT NULL
-     AND d.what_is_the_estimated_timeline IS NOT NULL
-    THEN d.deal_id END) AS bant_qualified,
-  round(
-    countDistinct(CASE
-      WHEN d.is_there_a_confirmation_of_budget = 'Yes'
-       AND d.who_is_the_decision_maker IS NOT NULL
-       AND d.use_case IS NOT NULL
-       AND d.what_is_the_estimated_timeline IS NOT NULL
-      THEN d.deal_id END) * 100.0
-    / nullIf(countDistinct(d.deal_id), 0)
-  , 1) AS bant_rate_pct
-FROM hs_analytics.deals d FINAL
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-  AND d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-                       '60% - Price Negotiation','75% - Contract Review')
-  AND d.became_5_deal_date >= '2026-04-01'
+-- Pipeline by industry:
+SELECT COALESCE(industry,'Unknown') AS industry,
+       COUNT(DISTINCT id) AS deals,
+       ROUND(SUM(amount)/1e6,1) AS pipeline_m
+FROM deals WHERE status = 'open'
+GROUP BY industry ORDER BY pipeline_m DESC
 
 =================================================================
 """
 
-# Tool definition passed to Claude on every call
 _QUERY_TOOL = {
     "name": "query_clickhouse",
     "description": (
-        "Execute a SELECT query against the Kore.ai ClickHouse pipeline database. "
-        "Use this for any question about deals, AEs, regions, industries, stages, "
-        "win/loss data, competitors, BANT, attainment, or any metric. "
-        "Always follow the schema rules, mandatory base filters, and FINAL keyword. "
-        "If the result starts with DATABASE CONNECTION FAILED or ERROR:, relay it to the user."
+        "Execute a SELECT query against the ClickHouse deals table. "
+        "Use for any question about deals, pipeline value, win/loss rates, regions, "
+        "industries, owners, stages, or any data metric. "
+        "Always follow SELECT-only rule and LIMIT row queries to 100. "
+        "Relay DATABASE CONNECTION FAILED or ERROR: messages directly to the user."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "sql": {
                 "type": "string",
-                "description": (
-                    "A valid ClickHouse SELECT or WITH query following all schema rules above. "
-                    "Always use FINAL, apply mandatory base filters, and LIMIT row queries to 100."
-                )
+                "description": "A valid SELECT or WITH query against the deals table.",
             }
         },
-        "required": ["sql"]
-    }
+        "required": ["sql"],
+    },
 }
 
 
 # =============================================================================
-# Pydantic Models
+# Pydantic models
 # =============================================================================
 
 class ChatMessage(BaseModel):
@@ -598,33 +398,23 @@ class ChatRequest(BaseModel):
 class ExportRequest(BaseModel):
     format: Literal["pdf", "pptx"]
     conversation: List[ChatMessage] = []
-    title: str = "Pipeline Intelligence Report"
+    title: str = "Deals Intelligence Report"
 
 
 # =============================================================================
-# Core Claude Tool Loop
+# Claude tool loop
 # =============================================================================
 
 def _extract_text(content_blocks) -> str:
-    """Extract all text blocks from a Claude response content list."""
-    parts = []
-    for block in content_blocks:
-        if hasattr(block, "text") and block.text:
-            parts.append(block.text)
-    return "\n".join(parts).strip()
+    return "\n".join(
+        b.text for b in content_blocks if hasattr(b, "text") and b.text
+    ).strip()
 
 
-def _call_claude_with_tools(messages: list, max_tokens: int = 2000) -> str:
+def _call_claude(messages: list, max_tokens: int = 2048) -> str:
     """
-    Call Claude with the query_clickhouse tool. Runs the agentic tool loop
-    (up to 5 rounds) and returns the final text reply.
-
-    KEY FIX vs v1:
-    - Tool errors are returned as tool_result content (not raised), so Claude
-      always sees the error and produces a real text response.
-    - Text extraction scans ALL content blocks, not just the first one.
-    - If Claude produces no text at all, we return a diagnostic message
-      (never the unhelpful "Please try rephrasing" fallback).
+    Run Claude with the query_clickhouse tool.
+    Executes up to 5 tool-use rounds, then returns the final text reply.
     """
     response = _ai_client.messages.create(
         model=_CLAUDE_MODEL,
@@ -635,23 +425,25 @@ def _call_claude_with_tools(messages: list, max_tokens: int = 2000) -> str:
         max_tokens=max_tokens,
     )
 
-    rounds = 0
-    while response.stop_reason == "tool_use" and rounds < 5:
-        rounds += 1
+    for round_num in range(5):
+        if response.stop_reason != "tool_use":
+            break
 
-        # Find the tool_use block
         tool_block = next((b for b in response.content if b.type == "tool_use"), None)
         if not tool_block:
             break
 
-        sql          = tool_block.input.get("sql", "")
-        print(f"  🔍 DB round {rounds} | SQL: {sql[:150]}...")
+        sql = tool_block.input.get("sql", "")
+        print(f"  🔄 Tool round {round_num + 1} | SQL: {sql[:120]}...")
 
-        # Run the query — NEVER raises, always returns a string
         query_result = run_clickhouse_query(sql)
-        print(f"  📥 Result preview: {query_result[:250]}")
 
-        # Feed the tool result back to Claude
+        is_error = any(query_result.startswith(p) for p in [
+            "DATABASE CONNECTION FAILED",
+            "ERROR:",
+            "DATABASE ERROR:",
+        ])
+
         messages = messages + [
             {"role": "assistant", "content": response.content},
             {
@@ -661,9 +453,7 @@ def _call_claude_with_tools(messages: list, max_tokens: int = 2000) -> str:
                         "type": "tool_result",
                         "tool_use_id": tool_block.id,
                         "content": query_result,
-                        # Mark as error if the query failed so Claude knows to report it
-                        "is_error": query_result.startswith("DATABASE CONNECTION FAILED")
-                                    or query_result.startswith("ERROR:"),
+                        "is_error": is_error,
                     }
                 ],
             },
@@ -681,13 +471,11 @@ def _call_claude_with_tools(messages: list, max_tokens: int = 2000) -> str:
     reply = _extract_text(response.content)
 
     if not reply:
-        # Diagnostic fallback — tells the user something useful
         reply = (
-            "⚠️ No text response was generated.\n\n"
+            "⚠️ No response was generated.\n\n"
             "This usually means the ClickHouse connection failed before Claude could answer. "
-            "Please open **/debug/clickhouse** in your browser to diagnose the connection, "
-            "then verify `CLICKHOUSE_API_URL` and `CLICKHOUSE_API_TOKEN` in your `.env` file "
-            "and restart the server."
+            "Open **/debug/db** to diagnose the connection, then verify "
+            "`CLICKHOUSE_API_URL` and `CLICKHOUSE_API_TOKEN` in `.env` and restart."
         )
 
     return reply
@@ -703,163 +491,131 @@ def root():
         return HTMLResponse(content=f.read())
 
 
-@app.get("/debug/clickhouse")
-def debug_clickhouse():
+@app.get("/debug/db")
+def debug_db():
     """
-    Connectivity diagnostic — tests all 13 path+method strategies.
-    Open in browser: http://localhost:8000/debug/clickhouse
-
-    This is the FIRST thing to check when chat answers with a DB error.
-
-    Specifically handles FastAPI proxy wrappers (like clickhouse-api-*.onrender.com)
-    where the root GET / returns a health-check JSON instead of query results.
+    Connectivity diagnostic. Open in browser: http://localhost:8000/debug/db
+    Tests every relevant endpoint on your ClickHouse HTTP proxy.
     """
-    base_url  = (os.getenv("CLICKHOUSE_API_URL") or "").rstrip("/")
-    api_token = os.getenv("CLICKHOUSE_API_TOKEN") or ""
+    base_url = _base_url()
+    token    = _token()
 
     config = {
-        "CLICKHOUSE_API_URL":   base_url  or "❌ NOT SET",
-        "CLICKHOUSE_API_TOKEN": f"✅ set ({len(api_token)} chars)" if api_token else "❌ NOT SET",
+        "CLICKHOUSE_API_URL":   base_url or "❌ NOT SET",
+        "CLICKHOUSE_API_TOKEN": f"✅ set ({len(token)} chars)" if token else "❌ NOT SET",
     }
 
-    if not base_url or not api_token:
+    if not base_url or not token:
         return {
-            "status":  "MISCONFIGURED",
-            "config":  config,
-            "message": "Set CLICKHOUSE_API_URL and CLICKHOUSE_API_TOKEN in .env, then restart.",
+            "status": "MISCONFIGURED",
+            "config": config,
+            "fix": (
+                "Add these to your .env file and restart:\n"
+                "  CLICKHOUSE_API_URL=https://clickhouse-api-j55l.onrender.com\n"
+                "  CLICKHOUSE_API_TOKEN=your_token_here"
+            ),
         }
 
-    test_sql = "SELECT 1 AS ping"
-    results  = {}
-    working  = []
+    results = {}
 
-    for label, fn in _build_strategies(base_url, api_token, test_sql):
-        try:
-            r = fn()
-            is_health = _is_health_response(r)
-            results[label] = {
-                "http_status":   r.status_code,
-                "body_preview":  r.text[:300],
-                "is_health_check": is_health,
-                "usable":        r.status_code == 200 and not is_health,
-            }
-            if results[label]["usable"]:
-                working.append(label)
-        except Exception as e:
-            results[label] = {"error": f"{type(e).__name__}: {e}"}
+    # Test 1: health check (unauthenticated GET /)
+    try:
+        r = httpx.get(base_url, timeout=10)
+        results["GET /"] = {"status": r.status_code, "body": r.text[:200]}
+    except Exception as e:
+        results["GET /"] = {"error": str(e)}
 
-    note = (
-        "NOTE: Some strategies returned HTTP 200 but with a proxy health-check body "
-        "({\"status\":\"ok\"}) instead of query results. These are marked is_health_check=true "
-        "and are NOT usable for queries."
-    ) if any(
-        isinstance(v, dict) and v.get("is_health_check") for v in results.values()
-    ) else None
+    # Test 2: list databases (authenticated)
+    try:
+        r = httpx.get(f"{base_url}/databases", headers=_auth_headers(), timeout=10)
+        results["GET /databases"] = {"status": r.status_code, "body": r.text[:300]}
+    except Exception as e:
+        results["GET /databases"] = {"error": str(e)}
+
+    # Test 3: actual query — SELECT 1
+    ping_result = run_clickhouse_query("SELECT 1 AS ping")
+    query_ok = not any(ping_result.startswith(p) for p in [
+        "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
+    ])
+    results["POST /query (SELECT 1)"] = {"result": ping_result, "ok": query_ok}
 
     return {
-        "status":             "OK" if working else "FAILED",
-        "config":             config,
-        "working_strategies": working,
-        "note":               note,
-        "all_results":        results,
+        "status":  "OK" if query_ok else "FAILED",
+        "config":  config,
+        "tests":   results,
         "recommendation": (
-            f"✅ Queries will use: {working[0]}. Chat should work now." if working
-            else (
-                "❌ No strategy returned real ClickHouse data.\n"
-                "If your proxy is a FastAPI app, find out what path accepts SQL "
-                "(e.g. POST /query with JSON body {\"sql\":\"...\"}) and update CLICKHOUSE_API_URL "
-                "to include that path, or share the proxy source code so the connector can be tuned."
-            )
+            "✅ Database connected. Chat is ready."
+            if query_ok else
+            "❌ Query test failed. Check the 'POST /query' result above for the exact error.\n"
+            "Common causes:\n"
+            "  • Wrong token → 401 Unauthorized\n"
+            "  • Wrong URL   → ConnectError or 404\n"
+            "  • Proxy down  → ConnectError or 503"
         ),
     }
 
 
 @app.post("/chat")
 def chat(payload: ChatRequest):
-    """
-    Conversational pipeline Q&A.
-    Sends full history each turn; Claude queries ClickHouse live as needed.
-    """
-    messages = []
-    for turn in payload.history:
-        messages.append({"role": turn.role, "content": turn.content})
+    messages = [{"role": m.role, "content": m.content} for m in payload.history]
     messages.append({"role": "user", "content": payload.message})
 
-    print(f"💬 [chat] Q: {payload.message[:120]}")
+    print(f"💬 [chat] {payload.message[:100]}")
     try:
-        reply = _call_claude_with_tools(messages)
+        reply = _call_claude(messages)
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Claude error: {exc}")
 
-    print(f"✅ [chat] Done ({len(reply)} chars)")
+    print(f"✅ [chat] {len(reply)} chars")
     return {"reply": reply}
 
 
 @app.post("/export/pdf")
 def export_pdf(payload: ExportRequest):
-    """Generate a multi-page PDF report from the current conversation."""
     conv_text = "\n\n".join(
         f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}"
         for m in payload.conversation
     )
-
-    export_prompt = (
-        f"Based on this conversation, produce a structured pipeline intelligence report "
-        f"titled '{payload.title}'. "
-        "Format with these exact section headers (use ## for each):\n"
-        "## Executive Summary\n"
-        "## Pipeline Health\n"
-        "## Key Metrics\n"
-        "## Regional Breakdown\n"
-        "## Risk & Opportunities\n"
-        "## Recommended Actions\n\n"
-        "Query the database for any missing data. Be data-driven with real numbers.\n\n"
-        f"CONVERSATION CONTEXT:\n{conv_text}"
+    prompt = (
+        f"Based on this conversation, write a structured deals intelligence report "
+        f"titled '{payload.title}'. Use these exact ## section headers:\n"
+        "## Executive Summary\n## Pipeline Overview\n## Key Metrics\n"
+        "## Regional Breakdown\n## Win / Loss Analysis\n## Recommendations\n\n"
+        "Query the database for any missing numbers. Be data-driven.\n\n"
+        f"CONVERSATION:\n{conv_text}"
     )
-
-    messages = [{"role": "user", "content": export_prompt}]
-    print(f"📄 [export/pdf] Generating: {payload.title}")
     try:
-        report_text = _call_claude_with_tools(messages, max_tokens=3000)
+        report_text = _call_claude([{"role": "user", "content": prompt}], max_tokens=3000)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Claude error: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc))
 
     pdf_bytes = _build_pdf(payload.title, report_text)
     filename  = re.sub(r"[^\w\-]", "_", payload.title) + ".pdf"
     return StreamingResponse(
-        io.BytesIO(pdf_bytes),
-        media_type="application/pdf",
+        io.BytesIO(pdf_bytes), media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
 @app.post("/export/pptx")
 def export_pptx(payload: ExportRequest):
-    """Generate a branded PPTX presentation from the current conversation."""
     conv_text = "\n\n".join(
         f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}"
         for m in payload.conversation
     )
-
-    export_prompt = (
-        f"Based on this conversation, produce slide content for a pipeline presentation "
-        f"titled '{payload.title}'. "
-        "Output each slide as:\n"
-        "SLIDE: <Slide Title>\n"
-        "BULLETS:\n- bullet 1\n- bullet 2\n...\n\n"
-        "Include these slides: Title/Overview, Pipeline Health, Key Metrics, "
-        "Regional Breakdown, Risk & Opportunities, Recommended Actions.\n"
-        "Query the database for any missing data. Keep bullets crisp and data-driven.\n\n"
-        f"CONVERSATION CONTEXT:\n{conv_text}"
+    prompt = (
+        f"Based on this conversation, write slide content for a presentation titled '{payload.title}'.\n"
+        "Output each slide as:\nSLIDE: <Title>\nBULLETS:\n- bullet 1\n- bullet 2\n\n"
+        "Include: Title/Overview, Pipeline Health, Key Metrics, Regional Breakdown, "
+        "Win/Loss Analysis, Recommendations.\n"
+        "Query the database for any missing data. Keep bullets crisp.\n\n"
+        f"CONVERSATION:\n{conv_text}"
     )
-
-    messages = [{"role": "user", "content": export_prompt}]
-    print(f"📊 [export/pptx] Generating: {payload.title}")
     try:
-        slide_text = _call_claude_with_tools(messages, max_tokens=3000)
+        slide_text = _call_claude([{"role": "user", "content": prompt}], max_tokens=3000)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Claude error: {exc}")
+        raise HTTPException(status_code=502, detail=str(exc))
 
     pptx_bytes = _build_pptx(payload.title, slide_text)
     filename   = re.sub(r"[^\w\-]", "_", payload.title) + ".pptx"
@@ -874,36 +630,33 @@ def export_pptx(payload: ExportRequest):
 # PDF Builder
 # =============================================================================
 
-C_NAVY_PDF  = colors.HexColor("#0D1B3E")
-C_BLUE_PDF  = colors.HexColor("#1565C0")
-C_WHITE_PDF = colors.white
-C_BG_PDF    = colors.HexColor("#F7F9FC")
-C_TXT_PDF   = colors.HexColor("#1E293B")
-C_MID_PDF   = colors.HexColor("#475569")
-C_DIM_PDF   = colors.HexColor("#94A3B8")
-C_ROW_ALT   = colors.HexColor("#EEF4FF")
+_C_NAVY  = colors.HexColor("#0D1B3E")
+_C_BLUE  = colors.HexColor("#1565C0")
+_C_WHITE = colors.white
+_C_BG    = colors.HexColor("#F7F9FC")
+_C_TXT   = colors.HexColor("#1E293B")
+_C_DIM   = colors.HexColor("#94A3B8")
 
-SECTION_PALETTE = {
-    "executive summary":   colors.HexColor("#0D1B3E"),
-    "pipeline health":     colors.HexColor("#1565C0"),
-    "key metrics":         colors.HexColor("#004D40"),
-    "regional breakdown":  colors.HexColor("#BF360C"),
-    "risk":                colors.HexColor("#B71C1C"),
-    "recommended actions": colors.HexColor("#1B5E20"),
+_SECTION_COLORS = {
+    "executive": colors.HexColor("#0D1B3E"),
+    "pipeline":  colors.HexColor("#1565C0"),
+    "metric":    colors.HexColor("#004D40"),
+    "regional":  colors.HexColor("#BF360C"),
+    "win":       colors.HexColor("#B71C1C"),
+    "loss":      colors.HexColor("#B71C1C"),
+    "recommend": colors.HexColor("#1B5E20"),
 }
 
 PW, PH = A4
-ML = MR = 0.6 * inch
-MT      = 0.45 * inch
-MB      = 0.40 * inch
-HDR_H   = 44
-FTR_H   = 20
-CW      = PW - ML - MR
+_ML = _MR = 0.6 * inch
+_MT = 0.45 * inch
+_MB = 0.40 * inch
+_HDR_H = 44
+_FTR_H = 20
+_CW = PW - _ML - _MR
 
 
 def _strip_md(t: str) -> str:
-    if not t:
-        return ""
     t = re.sub(r'\*{1,3}(.*?)\*{1,3}', r'\1', t)
     t = re.sub(r'#{1,6}\s*', '', t)
     t = re.sub(r'^[\-\*•]\s*', '', t, flags=re.M)
@@ -911,83 +664,81 @@ def _strip_md(t: str) -> str:
     return t.strip()
 
 
-def _make_styles():
-    styles = getSampleStyleSheet()
+def _pdf_styles():
     return {
-        "Cover_Title": ParagraphStyle("Cover_Title", fontSize=28, leading=34,
-                                       textColor=C_WHITE_PDF, fontName="Helvetica-Bold", spaceAfter=10),
-        "Cover_Sub":   ParagraphStyle("Cover_Sub",   fontSize=14, leading=20,
-                                       textColor=colors.HexColor("#B0BEC5"), fontName="Helvetica", spaceAfter=6),
-        "Section_H":   ParagraphStyle("Section_H",   fontSize=12, leading=16,
-                                       textColor=C_WHITE_PDF, fontName="Helvetica-Bold"),
+        "Cover_Title": ParagraphStyle("Cover_Title", fontSize=26, leading=32,
+                                       textColor=_C_WHITE, fontName="Helvetica-Bold", spaceAfter=8),
+        "Cover_Sub":   ParagraphStyle("Cover_Sub",   fontSize=13, leading=18,
+                                       textColor=colors.HexColor("#B0BEC5"), fontName="Helvetica"),
+        "Section_H":   ParagraphStyle("Section_H",   fontSize=11, leading=15,
+                                       textColor=_C_WHITE, fontName="Helvetica-Bold"),
         "Body":        ParagraphStyle("Body",   fontSize=9,  leading=14,
-                                       textColor=C_TXT_PDF, fontName="Helvetica", spaceAfter=4, spaceBefore=2),
+                                       textColor=_C_TXT, fontName="Helvetica", spaceAfter=4),
         "Bullet":      ParagraphStyle("Bullet", fontSize=9,  leading=14,
-                                       textColor=C_TXT_PDF, fontName="Helvetica",
+                                       textColor=_C_TXT, fontName="Helvetica",
                                        leftIndent=12, firstLineIndent=-8, spaceAfter=3),
-        "H2":          ParagraphStyle("H2",     fontSize=11, leading=15,
-                                       textColor=C_NAVY_PDF, fontName="Helvetica-Bold", spaceBefore=10, spaceAfter=4),
-        "H3":          ParagraphStyle("H3",     fontSize=9,  leading=13,
-                                       textColor=C_BLUE_PDF, fontName="Helvetica-Bold", spaceBefore=6, spaceAfter=2),
+        "H2":          ParagraphStyle("H2",  fontSize=11, leading=15, textColor=_C_NAVY,
+                                       fontName="Helvetica-Bold", spaceBefore=10, spaceAfter=4),
+        "H3":          ParagraphStyle("H3",  fontSize=9,  leading=13, textColor=_C_BLUE,
+                                       fontName="Helvetica-Bold", spaceBefore=6, spaceAfter=2),
     }
 
 
-def _parse_report_sections(text: str):
+def _parse_sections(text: str):
     parts = re.split(r'^##\s+', text, flags=re.MULTILINE)
-    sections = []
-    for part in parts:
-        if not part.strip():
-            continue
-        lines = part.strip().split("\n", 1)
-        sections.append((lines[0].strip(), lines[1].strip() if len(lines) > 1 else ""))
-    return sections
+    return [
+        (lines[0].strip(), lines[1].strip() if len(lines) > 1 else "")
+        for part in parts if part.strip()
+        for lines in [part.strip().split("\n", 1)]
+    ]
 
 
 def _build_pdf(title: str, report_text: str) -> bytes:
-    buf    = io.BytesIO()
-    styles = _make_styles()
-    sections = _parse_report_sections(report_text)
+    buf     = io.BytesIO()
+    styles  = _pdf_styles()
+    sections = _parse_sections(report_text)
 
     def _on_page(canvas, doc):
         canvas.saveState()
-        canvas.setFillColor(C_NAVY_PDF)
-        canvas.rect(0, PH - HDR_H - MT, PW, HDR_H + MT, fill=1, stroke=0)
-        canvas.setFillColor(C_WHITE_PDF)
+        canvas.setFillColor(_C_NAVY)
+        canvas.rect(0, PH - _HDR_H - _MT, PW, _HDR_H + _MT, fill=1, stroke=0)
+        canvas.setFillColor(_C_WHITE)
         canvas.setFont("Helvetica-Bold", 10)
-        canvas.drawString(ML, PH - MT - 28, title)
-        canvas.setFillColor(C_BG_PDF)
-        canvas.rect(0, 0, PW, FTR_H + MB, fill=1, stroke=0)
-        canvas.setFillColor(C_DIM_PDF)
+        canvas.drawString(_ML, PH - _MT - 28, title)
+        canvas.setFillColor(_C_BG)
+        canvas.rect(0, 0, PW, _FTR_H + _MB, fill=1, stroke=0)
+        canvas.setFillColor(_C_DIM)
         canvas.setFont("Helvetica", 7)
-        footer = f"Pipeline Intelligence  |  AI-Generated  |  CONFIDENTIAL  |  {date.today().strftime('%B %Y')}"
-        canvas.drawCentredString(PW / 2, MB + 5, footer)
-        canvas.drawRightString(PW - MR, MB + 5, f"Page {canvas.getPageNumber()}")
+        footer = f"DIUD Report  |  AI-Generated  |  CONFIDENTIAL  |  {date.today().strftime('%B %Y')}"
+        canvas.drawCentredString(PW / 2, _MB + 5, footer)
+        canvas.drawRightString(PW - _MR, _MB + 5, f"Page {canvas.getPageNumber()}")
         canvas.restoreState()
 
-    frame    = Frame(ML, MB + FTR_H, CW, PH - HDR_H - MT - MB - FTR_H, id="main")
+    frame    = Frame(_ML, _MB + _FTR_H, _CW, PH - _HDR_H - _MT - _MB - _FTR_H, id="main")
     template = PageTemplate(id="main", frames=[frame], onPage=_on_page)
-    doc = BaseDocTemplate(buf, pagesize=A4, leftMargin=ML, rightMargin=MR,
-                          topMargin=MT + HDR_H, bottomMargin=MB + FTR_H)
+    doc = BaseDocTemplate(buf, pagesize=A4, leftMargin=_ML, rightMargin=_MR,
+                          topMargin=_MT + _HDR_H, bottomMargin=_MB + _FTR_H)
     doc.addPageTemplates([template])
 
-    story = [Spacer(1, 1.2 * inch),
-             Paragraph(title, styles["Cover_Title"]),
-             Paragraph(f"Generated {date.today().strftime('%B %d, %Y')}", styles["Cover_Sub"]),
-             PageBreak()]
+    story = [
+        Spacer(1, 1.0 * inch),
+        Paragraph(title, styles["Cover_Title"]),
+        Paragraph(f"Generated {date.today().strftime('%B %d, %Y')}", styles["Cover_Sub"]),
+        PageBreak(),
+    ]
 
     for sec_title, sec_body in sections:
-        color_key = next((k for k in SECTION_PALETTE if k in sec_title.lower()), None)
-        bar_color = SECTION_PALETTE.get(color_key, C_BLUE_PDF)
+        color_key = next((k for k in _SECTION_COLORS if k in sec_title.lower()), None)
+        bar_color = _SECTION_COLORS.get(color_key, _C_BLUE)
 
         story.append(Table(
             [[Paragraph(sec_title.upper(), styles["Section_H"])]],
-            colWidths=[CW],
+            colWidths=[_CW],
             style=TableStyle([
                 ("BACKGROUND",    (0, 0), (-1, -1), bar_color),
                 ("TOPPADDING",    (0, 0), (-1, -1), 8),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
                 ("LEFTPADDING",   (0, 0), (-1, -1), 10),
-                ("RIGHTPADDING",  (0, 0), (-1, -1), 10),
             ])
         ))
         story.append(Spacer(1, 6))
@@ -1005,8 +756,7 @@ def _build_pdf(title: str, report_text: str) -> bytes:
             else:
                 story.append(Paragraph(_strip_md(line), styles["Body"]))
 
-        story.append(Spacer(1, 12))
-        story.append(PageBreak())
+        story.extend([Spacer(1, 12), PageBreak()])
 
     doc.build(story)
     return buf.getvalue()
@@ -1016,36 +766,35 @@ def _build_pdf(title: str, report_text: str) -> bytes:
 # PPTX Builder
 # =============================================================================
 
-C_NAVY_P  = RGBColor(0x0D, 0x1B, 0x3E)
-C_DNAV_P  = RGBColor(0x0A, 0x11, 0x28)
-C_BLUE_P  = RGBColor(0x1E, 0x88, 0xE5)
-C_WHITE_P = RGBColor(0xFF, 0xFF, 0xFF)
-C_LTBG_P  = RGBColor(0xF5, 0xF7, 0xFA)
-C_TXT_P   = RGBColor(0x1A, 0x1A, 0x2E)
-C_DIM_P   = RGBColor(0x88, 0x99, 0xAA)
+_C_NAVY_P  = RGBColor(0x0D, 0x1B, 0x3E)
+_C_DNAV_P  = RGBColor(0x0A, 0x11, 0x28)
+_C_BLUE_P  = RGBColor(0x1E, 0x88, 0xE5)
+_C_WHITE_P = RGBColor(0xFF, 0xFF, 0xFF)
+_C_LTBG_P  = RGBColor(0xF5, 0xF7, 0xFA)
+_C_TXT_P   = RGBColor(0x1A, 0x1A, 0x2E)
+_C_DIM_P   = RGBColor(0x88, 0x99, 0xAA)
 
-SLIDE_SECTION_COLORS = {
-    "overview":   RGBColor(0x1E, 0x88, 0xE5),
-    "pipeline":   RGBColor(0x00, 0x89, 0x7B),
-    "metric":     RGBColor(0x2E, 0x7D, 0x32),
-    "regional":   RGBColor(0xBF, 0x36, 0x0C),
-    "risk":       RGBColor(0xC6, 0x28, 0x28),
-    "opportunit": RGBColor(0xC6, 0x28, 0x28),
-    "recommend":  RGBColor(0x1B, 0x5E, 0x20),
-    "action":     RGBColor(0x1B, 0x5E, 0x20),
+_SLIDE_ACCENT = {
+    "overview":  RGBColor(0x1E, 0x88, 0xE5),
+    "pipeline":  RGBColor(0x00, 0x89, 0x7B),
+    "metric":    RGBColor(0x2E, 0x7D, 0x32),
+    "regional":  RGBColor(0xBF, 0x36, 0x0C),
+    "win":       RGBColor(0x2E, 0x7D, 0x32),
+    "loss":      RGBColor(0xC6, 0x28, 0x28),
+    "recommend": RGBColor(0x1B, 0x5E, 0x20),
 }
 
 SLIDE_W = Inches(13.33)
 SLIDE_H = Inches(7.5)
 
 
-def _pptx_bg(slide, color: RGBColor):
+def _pptx_bg(slide, color):
     fill = slide.background.fill
     fill.solid()
     fill.fore_color.rgb = color
 
 
-def _pptx_rect(slide, l, t, w, h, color: RGBColor):
+def _pptx_rect(slide, l, t, w, h, color):
     shp = slide.shapes.add_shape(1, Inches(l), Inches(t), Inches(w), Inches(h))
     shp.fill.solid()
     shp.fill.fore_color.rgb = color
@@ -1056,80 +805,75 @@ def _pptx_rect(slide, l, t, w, h, color: RGBColor):
 def _pptx_txt(slide, text, l, t, w, h, bold=False, size=18, color=None, align=PP_ALIGN.LEFT):
     txb = slide.shapes.add_textbox(Inches(l), Inches(t), Inches(w), Inches(h))
     txb.word_wrap = True
-    tf  = txb.text_frame
+    tf = txb.text_frame
     tf.word_wrap = True
-    p   = tf.paragraphs[0]
+    p = tf.paragraphs[0]
     p.alignment = align
     run = p.add_run()
     run.text = text
     run.font.size  = Pt(size)
     run.font.bold  = bold
-    run.font.color.rgb = color or C_TXT_P
+    run.font.color.rgb = color or _C_TXT_P
     return txb
 
 
 def _parse_slides(text: str):
-    slides, current_title, current_bullets = [], None, []
+    slides, cur_title, cur_bullets = [], None, []
     for line in text.split("\n"):
         line = line.rstrip()
         if line.startswith("SLIDE:"):
-            if current_title is not None:
-                slides.append((current_title, current_bullets))
-            current_title, current_bullets = line[6:].strip(), []
-        elif line.startswith("- ") and current_title:
-            current_bullets.append(line[2:].strip())
-        elif line.startswith("BULLETS:"):
-            continue
-    if current_title is not None:
-        slides.append((current_title, current_bullets))
+            if cur_title is not None:
+                slides.append((cur_title, cur_bullets))
+            cur_title, cur_bullets = line[6:].strip(), []
+        elif line.startswith("- ") and cur_title:
+            cur_bullets.append(line[2:].strip())
+    if cur_title is not None:
+        slides.append((cur_title, cur_bullets))
     return slides
 
 
 def _build_pptx(title: str, slide_text: str) -> bytes:
-    slides_data = _parse_slides(slide_text) or [(title, [slide_text[:500]])]
+    slides_data = _parse_slides(slide_text) or [(title, [slide_text[:400]])]
 
     prs = Presentation()
     prs.slide_width  = SLIDE_W
     prs.slide_height = SLIDE_H
 
-    footer_text = (
-        f"Pipeline Intelligence  |  AI-Generated  |  CONFIDENTIAL  |  "
-        f"{date.today().strftime('%B %Y')}"
-    )
+    footer_text = f"DIUD  |  AI-Generated  |  CONFIDENTIAL  |  {date.today().strftime('%B %Y')}"
+    blank = prs.slide_layouts[6]
 
-    def _add_footer(slide):
-        _pptx_rect(slide, 0, 7.1, 13.33, 0.4, C_DNAV_P)
+    def _footer(slide):
+        _pptx_rect(slide, 0, 7.1, 13.33, 0.4, _C_DNAV_P)
         _pptx_txt(slide, footer_text, 0.3, 7.12, 12, 0.35,
-                  size=7, color=C_DIM_P, align=PP_ALIGN.CENTER)
+                  size=7, color=_C_DIM_P, align=PP_ALIGN.CENTER)
 
-    def _slide_accent(title_lower):
-        for k, c in SLIDE_SECTION_COLORS.items():
-            if k in title_lower:
+    def _accent(t_lower):
+        for k, c in _SLIDE_ACCENT.items():
+            if k in t_lower:
                 return c
-        return C_BLUE_P
+        return _C_BLUE_P
 
     # Cover slide
-    cover = prs.slides.add_slide(prs.slide_layouts[6])
-    _pptx_bg(cover, C_NAVY_P)
-    _pptx_rect(cover, 0, 3.2, 13.33, 0.06, C_BLUE_P)
-    _pptx_txt(cover, title, 0.8, 1.6, 11.5, 1.4, bold=True, size=36, color=C_WHITE_P)
-    _pptx_txt(cover, "Pipeline Intelligence Report", 0.8, 3.0, 8, 0.6,
-              size=16, color=RGBColor(0xB0, 0xBE, 0xC5))
+    cover = prs.slides.add_slide(blank)
+    _pptx_bg(cover, _C_NAVY_P)
+    _pptx_rect(cover, 0, 3.2, 13.33, 0.06, _C_BLUE_P)
+    _pptx_txt(cover, title, 0.8, 1.6, 11.5, 1.4, bold=True, size=34, color=_C_WHITE_P)
+    _pptx_txt(cover, "Deals Intelligence Report", 0.8, 3.0, 8, 0.6,
+              size=15, color=RGBColor(0xB0, 0xBE, 0xC5))
     _pptx_txt(cover, f"Generated: {date.today().strftime('%B %d, %Y')}", 0.8, 3.6, 6, 0.45,
               size=12, color=RGBColor(0x78, 0x90, 0x9C))
-    _pptx_txt(cover, "CONFIDENTIAL", 0.8, 6.8, 4, 0.4,
-              size=9, color=RGBColor(0xEF, 0x53, 0x50))
 
     # Content slides
-    blank = prs.slide_layouts[6]
     for i, (s_title, bullets) in enumerate(slides_data):
         slide  = prs.slides.add_slide(blank)
-        accent = _slide_accent(s_title.lower())
-        _pptx_bg(slide, C_LTBG_P)
+        accent = _accent(s_title.lower())
+        _pptx_bg(slide, _C_LTBG_P)
         _pptx_rect(slide, 0, 0, 13.33, 0.9, accent)
-        _pptx_txt(slide, s_title.upper(), 0.35, 0.1, 12.5, 0.7, bold=True, size=18, color=C_WHITE_P)
-        _pptx_txt(slide, str(i + 1), 12.5, 0.12, 0.6, 0.6, size=11, color=C_WHITE_P, align=PP_ALIGN.RIGHT)
-        _pptx_rect(slide, 0.3, 1.0, 12.73, 5.9, C_WHITE_P)
+        _pptx_txt(slide, s_title.upper(), 0.35, 0.1, 12.5, 0.7,
+                  bold=True, size=18, color=_C_WHITE_P)
+        _pptx_txt(slide, str(i + 1), 12.5, 0.12, 0.6, 0.6,
+                  size=11, color=_C_WHITE_P, align=PP_ALIGN.RIGHT)
+        _pptx_rect(slide, 0.3, 1.0, 12.73, 5.9, _C_WHITE_P)
 
         if bullets:
             txb = slide.shapes.add_textbox(Inches(0.5), Inches(1.1), Inches(12.3), Inches(5.6))
@@ -1139,19 +883,19 @@ def _build_pptx(title: str, slide_text: str) -> bytes:
             for j, bullet in enumerate(bullets[:12]):
                 p = tf.add_paragraph() if j > 0 else tf.paragraphs[0]
                 p.space_before = Pt(4)
-                p.space_after  = Pt(2)
                 dot = p.add_run()
                 dot.text = "●  "
-                dot.font.size  = Pt(8)
+                dot.font.size = Pt(8)
                 dot.font.color.rgb = accent
                 run = p.add_run()
                 run.text = bullet
-                run.font.size  = Pt(12)
-                run.font.color.rgb = C_TXT_P
+                run.font.size = Pt(12)
+                run.font.color.rgb = _C_TXT_P
         else:
-            _pptx_txt(slide, "No data available.", 0.5, 1.2, 12, 0.5, size=11, color=C_DIM_P)
+            _pptx_txt(slide, "No data available.", 0.5, 1.2, 12, 0.5,
+                      size=11, color=_C_DIM_P)
 
-        _add_footer(slide)
+        _footer(slide)
 
     buf = io.BytesIO()
     prs.save(buf)
