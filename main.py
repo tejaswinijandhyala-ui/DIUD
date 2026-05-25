@@ -228,14 +228,37 @@ def discover_schema() -> str:
 
 def _build_system_prompt() -> str:
     """
-    Assembles the full system prompt with the live-discovered schema block.
-    Called after discover_schema() and whenever schema refreshes.
+    Assembles the full system prompt with a compact schema block.
+    Only includes table names, column names, and types — no comments or padding.
+    This avoids hitting the 200k token limit with large schemas.
     """
-    schema = _SCHEMA_BLOCK or "Schema not yet loaded — try restarting the server."
-
-    # Derive table reference hint from discovered tables (for sample queries)
     table_refs = list(_LIVE_SCHEMA.keys())
     primary_table = table_refs[0] if table_refs else "your_database.deals"
+
+    # Compact schema: table(col:type, col:type, ...) — no comments, no padding
+    compact_lines = []
+    for table_key, cols in _LIVE_SCHEMA.items():
+        col_parts = []
+        for col in cols:
+            if isinstance(col, dict):
+                name = (
+                    col.get("name") or col.get("column_name") or
+                    col.get("Field") or list(col.keys())[0]
+                )
+                typ = (
+                    col.get("type") or col.get("data_type") or
+                    col.get("Type") or ""
+                )
+                col_parts.append(f"{name}:{typ}")
+            else:
+                col_parts.append(str(col))
+        compact_lines.append(f"{table_key}({', '.join(col_parts)})")
+
+    schema = "\n".join(compact_lines) or "Schema not yet loaded — try restarting the server."
+
+    # Safety cap — should rarely trigger with compact format, but prevents edge cases
+    if len(schema) > 20000:
+        schema = schema[:20000] + "\n[schema truncated — too many tables/columns]"
 
     return f"""
 You are DIUD (Decision Intelligence Using Data) — a conversational data assistant.
@@ -262,6 +285,7 @@ to open /debug/db to diagnose connectivity.
 
 =================================================================
 LIVE TABLE SCHEMA (auto-discovered at startup)
+Format: table_name(column:type, column:type, ...)
 =================================================================
 {schema}
 
@@ -297,6 +321,7 @@ ORDER BY value_m DESC
 
 =================================================================
 """
+
 
 
 # Initialise with a placeholder — will be replaced on startup
