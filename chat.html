@@ -87,13 +87,6 @@
     }
     .new-chat-btn:hover { background: rgba(255,255,255,.18); }
 
-    .debug-link {
-      color: #90A4AE; font-size: 11px; text-decoration: none;
-      padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,.12);
-      transition: all .15s;
-    }
-    .debug-link:hover { color: white; border-color: rgba(255,255,255,.3); }
-
     /* ── Body layout ─────────────────────────────────────────────────────── */
     .body-wrap { flex: 1; display: flex; overflow: hidden; }
 
@@ -124,24 +117,6 @@
     }
     .sidebar-divider { border: none; border-top: 1px solid rgba(255,255,255,.06); margin: 6px 0; }
 
-    /* ── Connection status badge ─────────────────────────────────────────── */
-    .conn-badge {
-      display: flex; align-items: center; gap: 6px;
-      padding: 8px 12px; border-radius: 8px; font-size: 11px;
-      border: 1px solid rgba(255,255,255,.08);
-      margin-top: auto; cursor: pointer;
-    }
-    .conn-badge .dot {
-      width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-      background: var(--txt-dim);
-    }
-    .conn-badge.ok   .dot { background: #4CAF50; }
-    .conn-badge.fail .dot { background: var(--red); }
-    .conn-badge.checking .dot {
-      background: var(--amber);
-      animation: pulse .8s infinite alternate;
-    }
-    @keyframes pulse { to { opacity: .3; } }
 
     /* ── Chat pane ───────────────────────────────────────────────────────── */
     .chat-pane {
@@ -300,17 +275,13 @@
 <!-- ── Topbar ─────────────────────────────────────────────────────────────── -->
 <header class="topbar">
   <div class="topbar-brand">
-    <div class="topbar-logo">PG</div>
     <div>
       <div class="topbar-title">Decision Intelligence Using Data (DIUD)</div>
       <div class="topbar-sub">Kore.ai</div>
     </div>
   </div>
   <div class="topbar-actions">
-    <a href="/debug/clickhouse" target="_blank" class="debug-link" title="Test ClickHouse connectivity">
-      🔌 Debug DB
-    </a>
-    <button class="export-btn btn-pdf" id="btn-pdf" disabled onclick="doExport('pdf')">
+    <button class="export-btn btn-pdf" id="btn-pdf" onclick="doExport('pdf')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
         <polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/>
@@ -318,7 +289,7 @@
       </svg>
       Export PDF
     </button>
-    <button class="export-btn btn-pptx" id="btn-pptx" disabled onclick="doExport('pptx')">
+    <button class="export-btn btn-pptx" id="btn-pptx" onclick="doExport('pptx')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
         <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/>
         <line x1="12" y1="17" x2="12" y2="21"/>
@@ -362,13 +333,6 @@
     <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Pipeline breakdown by industry</button>
     <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Financial Services deals in active pipeline</button>
 
-    <!-- Connection status — bottom of sidebar -->
-    <div id="conn-badge" class="conn-badge checking" style="margin-top:auto;"
-         onclick="checkConn()" title="Click to recheck ClickHouse connection">
-      <span class="dot"></span>
-      <span id="conn-label">Checking DB…</span>
-    </div>
-  </aside>
 
   <!-- Chat pane -->
   <main class="chat-pane">
@@ -542,6 +506,10 @@
 
   /* ── Export ──────────────────────────────────────────────────────────────── */
   async function doExport(format) {
+    if (!history.length) {
+    showToast("Have a conversation first, then export.", "error");
+    return;
+   }
     if (busy || !history.length) return;
     setBusy(true);
     showToast(`Generating ${format.toUpperCase()}… (this may take ~30s)`, "");
@@ -605,30 +573,6 @@
     _toastTimer = setTimeout(() => { t.className = ""; }, 4000);
   }
 
-  /* ── Connection health check ─────────────────────────────────────────────── */
-  async function checkConn() {
-    const badge = document.getElementById("conn-badge");
-    const label = document.getElementById("conn-label");
-    badge.className = "conn-badge checking";
-    label.textContent = "Checking…";
-    try {
-      const res  = await fetch("/debug/clickhouse");
-      const data = await res.json();
-      if (data.working_strategies && data.working_strategies.length > 0) {
-        badge.className  = "conn-badge ok";
-        label.textContent = "DB Connected ✓";
-      } else {
-        badge.className  = "conn-badge fail";
-        label.textContent = "DB Unreachable";
-      }
-    } catch {
-      badge.className  = "conn-badge fail";
-      label.textContent = "DB Unreachable";
-    }
-  }
-
-  /* Run connection check on load */
-  checkConn();
 </script>
 </body>
 </html>
