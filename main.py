@@ -1389,10 +1389,30 @@ def _extract_text(content_blocks) -> str:
 
 def _call_claude(messages: list, max_tokens: int = 2048) -> str:
     """Run Claude with query_clickhouse tool. Up to 5 tool rounds."""
+
+    # Sanitize: strip tool_use/tool_result content blocks from incoming history.
+    # Export passes raw chat history where assistant turns contain tool_use blocks
+    # without matching tool_result blocks → Anthropic API throws HTTP 400.
+    safe_messages = []
+    for m in messages:
+        content = m.get("content", "")
+        if isinstance(content, list):
+            text_parts = []
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    text_parts.append(b.get("text", ""))
+                elif hasattr(b, "type") and b.type == "text" and hasattr(b, "text"):
+                    text_parts.append(b.text)
+            text = "\n".join(t for t in text_parts if t).strip()
+            if text:
+                safe_messages.append({"role": m["role"], "content": text})
+        else:
+            safe_messages.append({"role": m["role"], "content": content})
+
     response = _ai_client.messages.create(
         model=_CLAUDE_MODEL,
         system=_SYSTEM_PROMPT,
-        messages=messages,
+        messages=safe_messages,
         tools=[_QUERY_TOOL],
         temperature=0,
         max_tokens=max_tokens,
@@ -1412,7 +1432,7 @@ def _call_claude(messages: list, max_tokens: int = 2048) -> str:
             "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
         ])
 
-        messages = messages + [
+        safe_messages = safe_messages + [
             {"role": "assistant", "content": response.content},
             {
                 "role": "user",
@@ -1428,7 +1448,7 @@ def _call_claude(messages: list, max_tokens: int = 2048) -> str:
         response = _ai_client.messages.create(
             model=_CLAUDE_MODEL,
             system=_SYSTEM_PROMPT,
-            messages=messages,
+            messages=safe_messages,
             tools=[_QUERY_TOOL],
             temperature=0,
             max_tokens=max_tokens,
