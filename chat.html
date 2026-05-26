@@ -307,7 +307,7 @@
     </div>
   </div>
   <div class="topbar-actions">
-    <a href="/debug/clickhouse" target="_blank" class="debug-link" title="Test ClickHouse connectivity">
+      <a href="/debug/db" target="_blank" class="debug-link" title="Test ClickHouse connectivity">
       🔌 Debug DB
     </a>
     <button class="export-btn btn-pdf" id="btn-pdf" disabled onclick="doExport('pdf')">
@@ -612,9 +612,9 @@
     badge.className = "conn-badge checking";
     label.textContent = "Checking…";
     try {
-      const res  = await fetch("/debug/clickhouse");
+      const res  = await fetch("/debug/db");          // ← correct endpoint
       const data = await res.json();
-      if (data.working_strategies && data.working_strategies.length > 0) {
+      if (data.status === "OK") {                      // ← correct field
         badge.className  = "conn-badge ok";
         label.textContent = "DB Connected ✓";
       } else {
