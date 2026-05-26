@@ -1560,56 +1560,121 @@ def chat(payload: ChatRequest):
     return {"reply": reply}
 
 
+class ExportRequest(BaseModel):
+    format: Literal["pdf", "pptx"]
+    conversation: List[dict]
+    title: str = "Pipeline Intelligence Report"
+    
+    
 @app.post("/export/pdf")
-def export_pdf(payload: ExportRequest):
-    conv_text = "\n\n".join(
-        f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}"
-        for m in payload.conversation
-    )
-    prompt = (
-        f"Based on this conversation, write a structured deals intelligence report "
-        f"titled '{payload.title}'. Use these ## section headers:\n"
-        "## Executive Summary\n## Pipeline Overview\n## Key Metrics\n"
-        "## Regional Breakdown\n## Win / Loss Analysis\n## Recommendations\n\n"
-        "Query the database for any missing numbers.\n\n"
-        f"CONVERSATION:\n{conv_text}"
-    )
-    try:
-        report_text = _call_claude([{"role": "user", "content": prompt}], max_tokens=3000)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
-    pdf_bytes = _build_pdf(payload.title, report_text)
-    filename  = re.sub(r"[^\w\-]", "_", payload.title) + ".pdf"
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes), media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+async def export_pdf(req: ExportRequest):
+
+    buffer = io.BytesIO()
+
+    doc = BaseDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=40,
+        rightMargin=40,
+        topMargin=40,
+        bottomMargin=40,
     )
 
+    frame = Frame(
+        doc.leftMargin,
+        doc.bottomMargin,
+        doc.width,
+        doc.height,
+        id='normal'
+    )
+
+    template = PageTemplate(id='test', frames=frame)
+    doc.addPageTemplates([template])
+
+    styles = {
+        "title": ParagraphStyle(
+            "title",
+            fontSize=20,
+            leading=24,
+            spaceAfter=20,
+        ),
+        "header": ParagraphStyle(
+            "header",
+            fontSize=14,
+            leading=18,
+            spaceAfter=10,
+            textColor=colors.HexColor("#0D1B3E"),
+        ),
+        "body": ParagraphStyle(
+            "body",
+            fontSize=10,
+            leading=15,
+        )
+    }
+
+    story = []
+
+    story.append(Paragraph(req.title, styles["title"]))
+    story.append(Spacer(1, 12))
+
+    for msg in req.conversation:
+
+        role = msg["role"].upper()
+        content = msg["content"].replace("\n", "<br/>")
+
+        story.append(
+            Paragraph(f"<b>{role}</b>", styles["header"])
+        )
+
+        story.append(
+            Paragraph(content, styles["body"])
+        )
+
+        story.append(Spacer(1, 16))
+
+    doc.build(story)
+
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition":
+            "attachment; filename=pipeline-report.pdf"
+        },
+    )
 
 @app.post("/export/pptx")
-def export_pptx(payload: ExportRequest):
-    conv_text = "\n\n".join(
-        f"{'User' if m.role == 'user' else 'Assistant'}: {m.content}"
-        for m in payload.conversation
-    )
-    prompt = (
-        f"Based on this conversation, write slide content for '{payload.title}'.\n"
-        "Output each slide as:\nSLIDE: <Title>\nBULLETS:\n- bullet 1\n- bullet 2\n\n"
-        "Include: Overview, Pipeline Health, Key Metrics, Regional Breakdown, "
-        "Win/Loss Analysis, Recommendations.\n"
-        "Query DB for any missing data.\n\n"
-        f"CONVERSATION:\n{conv_text}"
-    )
-    try:
-        slide_text = _call_claude([{"role": "user", "content": prompt}], max_tokens=3000)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
-    pptx_bytes = _build_pptx(payload.title, slide_text)
-    filename   = re.sub(r"[^\w\-]", "_", payload.title) + ".pptx"
+async def export_pptx(req: ExportRequest):
+
+    prs = Presentation()
+
+    slide_layout = prs.slide_layouts[1]
+
+    for idx, msg in enumerate(req.conversation):
+
+        slide = prs.slides.add_slide(slide_layout)
+
+        title = slide.shapes.title
+        title.text = f"{msg['role'].upper()}"
+
+        body = slide.placeholders[1]
+        body.text = msg["content"]
+
+    output = io.BytesIO()
+
+    prs.save(output)
+
+    output.seek(0)
+
     return StreamingResponse(
-        io.BytesIO(pptx_bytes),
+        output,
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition":
+            "attachment; filename=pipeline-report.pptx"
+        },
     )
 
 
