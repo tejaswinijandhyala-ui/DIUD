@@ -53,8 +53,11 @@
       flex-shrink: 0;
       box-shadow: 0 2px 8px rgba(0,0,0,.3);
       z-index: 100;
+      position: relative;
     }
-    .topbar-brand { display: flex; align-items: center; gap: 10px; }
+    .topbar-brand { display: flex; align-items: center; gap: 10px; position: absolute;   
+  left: 50%;        
+  transform: translateX(-50%);  }
     .topbar-logo-img {
   height: 44px;
   width: auto;
@@ -190,7 +193,7 @@
       overflow: hidden;
     }
     .msg.assistant .msg-avatar img {
-      width: 100%; height: 100%; object-fit: contain; border-radius: 8px;
+      width: 100%; height: 100%; object-fit: cover; border-radius: 8px;
     }
 
     .msg-body { display: flex; flex-direction: column; gap: 4px; max-width: calc(100% - 46px); }
