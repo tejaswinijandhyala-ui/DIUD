@@ -288,6 +288,48 @@ in the conversation context.
  
 If the tool returns a DATABASE CONNECTION FAILED message, relay it to
 the user clearly and suggest they check /debug/clickhouse.
+
+=================================================================
+DUPLICATE RECORD EXCLUSION — ALWAYS APPLY
+=================================================================
+ALL queries must exclude duplicate records. Apply these rules
+on EVERY table used:
+
+1. hs_analytics tables (deals, owners, contacts, companies)
+   ALWAYS use the FINAL keyword — it dedduplicates ReplacingMergeTree:
+     FROM hs_analytics.deals FINAL
+     FROM hs_analytics.owners FINAL
+     FROM hs_analytics.contacts FINAL
+     FROM hs_analytics.companies FINAL
+
+2. Aggregations — always use countDistinct(), never count():
+     countDistinct(deal_id)    — unique deals
+     countDistinct(contact_id) — unique contacts/MQLs
+     countDistinct(owner_id)   — unique owners
+   NEVER use count(*) or count(deal_id) for business metrics.
+
+3. Association / helper tables (no FINAL needed, but deduplicate
+   the join result):
+     LEFT JOIN (
+       SELECT DISTINCT contact_id, deal_id
+       FROM kore_ai_hubspot.gs_DealContactAssociation
+     ) z ON c.contact_id = z.contact_id
+   This prevents one contact mapping to the same deal multiple
+   times and inflating MQL conversion counts.
+
+4. Targets table — always GROUP BY + SUM, never raw select:
+     SELECT region, mql_source, SUM(mql_target) AS mql_target
+     FROM kore_ai_hubspot.gs_marketing_targets
+     GROUP BY region, mql_source
+   Multiple rows per combination exist by design — raw counts
+   will always be wrong.
+
+CHECKLIST before every query:
+  ☐ FINAL on every hs_analytics table
+  ☐ countDistinct() for every unique-count metric
+  ☐ DISTINCT inside gs_DealContactAssociation subquery
+  ☐ SUM + GROUP BY on gs_marketing_targets
+=================================================================
  
 =================================================================
 TABLES
