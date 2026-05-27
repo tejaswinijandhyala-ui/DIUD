@@ -1598,6 +1598,10 @@ def root():
         return HTMLResponse(content=f.read())
 
 
+@app.get("/logo.png")
+def serve_logo():
+    return FileResponse("logo.png", media_type="image/png")
+
 @app.get("/debug/db")
 def debug_db():
     """Full connectivity + schema diagnostic. Open: http://localhost:8000/debug/db"""
