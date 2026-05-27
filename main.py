@@ -10,7 +10,7 @@ import httpx
 import anthropic
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
@@ -1289,6 +1289,124 @@ RESPONSE LENGTH RULES:
 ❌ No lengthy introductions for simple queries
 ❌ No "Here's what I found..." preambles
 ❌ No "Would you like to see..." follow-ups unless directly relevant
+
+=================================================================
+DATE FIELD SELECTION RULES — CRITICAL
+=================================================================
+
+When a user asks a question, determine the INTENT first, then
+pick the correct date field accordingly:
+
+── 1. ACTIVE PIPELINE QUESTIONS ─────────────────────────────────
+Keywords: "active pipeline", "current pipeline", "open deals",
+          "deals in pipeline", "pipeline value", "pipeline by region/stage/source"
+
+→ ALWAYS filter by CLOSE DATE (when the deal is expected to close):
+    toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) >= 'FY_START'
+    toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) <= 'FY_END'
+
+  FY27: close_date >= '2026-04-01' AND close_date <= '2027-03-31'
+  FY26: close_date >= '2025-04-01' AND close_date <= '2026-03-31'
+
+  NEVER use became_X_deal_date for active pipeline questions.
+
+── 2. STAGE-SPECIFIC / COHORT QUESTIONS ─────────────────────────
+Keywords: "5% deals", "10% deals", "20% qualified deals",
+          "entered X stage", "reached X stage", "cohort",
+          "funnel conversion", "how many deals passed X%"
+
+→ Use the became_X_deal_date that matches the stage asked about:
+
+  Stage asked     →  Date field to use
+  ─────────────────────────────────────────────────────
+  5%  / IQM Held  →  became_5_deal_date  >= 'FY_START'
+  10% / Discovery →  became_10_deal_date >= 'FY_START'
+  20% / Solution  →  became_20_deal_date >= 'FY_START'
+  30% / Proof     →  became_30_deal_date >= 'FY_START'
+  40% / Proposal  →  became_40_deal_date >= 'FY_START'
+  60% / Price Neg →  became_60_deal_date >= 'FY_START'
+  75% / Contract  →  became_75_deal_date >= 'FY_START'
+
+  Also include all downstream stages in the deal_stage filter:
+  e.g. "FY27 20% cohort" → became_20_deal_date >= '2026-04-01'
+       AND deal_stage IN ('20% - Solution','30% - Proof',
+           '40% - Proposal','60% - Price Negotiation',
+           '75% - Contract Review','90% - Deal Desk Review',
+           'Closed Won','Closed Lost','Prospect Disengaged',
+           "Didn't Qualify",'Deal on Hold')
+
+── 3. WIN / LOSS QUESTIONS ──────────────────────────────────────
+Keywords: "closed won", "closed lost", "win rate", "won deals",
+          "lost deals", "wins this quarter/year"
+
+→ Use close_date for the period the deal closed:
+    AND deal_stage IN ('Closed Won','90% - Deal Desk Review')
+    AND toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) >= 'FY_START'
+    AND toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) <= 'FY_END'
+
+  OR use became_5_deal_date cohort if user asks:
+  "win rate for deals that entered pipeline in FY27"
+
+── 4. MQL QUESTIONS ─────────────────────────────────────────────
+Keywords: "MQL", "marketing qualified lead", "leads", "contacts",
+          "MQL conversion", "MQL by source/region", "MQL targets"
+
+→ ALWAYS use the MQL entry date field:
+    date_entered_marketing_qualified_lead_lifecycle_stage_pipeline
+
+  Cast pattern:
+    CAST(LEFT(coalesce(
+      date_entered_marketing_qualified_lead_lifecycle_stage_pipeline,
+      '1900-01-01'), 10) AS DATE) AS date_entered_mql
+
+  FY27 MQL cohort: date_entered_mql >= '2026-04-01'
+  FY26 MQL cohort: date_entered_mql >= '2025-04-01'
+                   AND date_entered_mql < '2026-04-01'
+
+  NEVER use close_date or became_X_deal_date for MQL questions.
+
+── 5. DEAL CREATION QUESTIONS ───────────────────────────────────
+Keywords: "deals created", "new deals", "deals added", "created in"
+
+→ Use create_date:
+    toDate(LEFT(coalesce(create_date,'1900-01-01'),10)) >= 'FY_START'
+    toDate(LEFT(coalesce(create_date,'1900-01-01'),10)) <= 'FY_END'
+
+── 6. LAST CONTACTED / STALLED QUESTIONS ────────────────────────
+Keywords: "last contacted", "no activity", "stalled", "not touched"
+
+→ Use last_contacted:
+    toDate(LEFT(coalesce(last_contacted,'1900-01-01'),10))
+
+── DECISION TREE — WHICH DATE FIELD? ────────────────────────────
+
+  User asks about...               → Date field to use
+  ─────────────────────────────────────────────────────────────
+  Active pipeline / open deals     → close_date (FY range)
+  Deals closing this month/quarter → close_date
+  Deals at a specific % stage      → became_X_deal_date
+  Funnel conversion / cohort       → became_X_deal_date
+  MQL / leads / contacts           → date_entered_mql
+  Closed won / lost deals          → close_date (when closed)
+  Win rate for a cohort            → became_5_deal_date (entry)
+  New deals added                  → create_date
+  Stalled / no activity            → last_contacted
+  Deal approval timing             → became_X_deal_date
+
+── COMMON MISTAKES TO AVOID ─────────────────────────────────────
+❌ Using became_20_deal_date to filter "active pipeline"
+   → Active pipeline = close_date within FY range
+
+❌ Using close_date to filter "FY27 20% cohort"
+   → 20% cohort = became_20_deal_date >= '2026-04-01'
+
+❌ Using close_date or became_X for MQL questions
+   → MQL questions always use date_entered_mql
+
+❌ Using create_date for pipeline or cohort analysis
+   → create_date is only for "when was the deal created"
+
+=================================================================
  
 =================================================================
 QUERY RULES
