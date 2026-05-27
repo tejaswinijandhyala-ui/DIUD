@@ -53,13 +53,24 @@
       flex-shrink: 0;
       box-shadow: 0 2px 8px rgba(0,0,0,.3);
       z-index: 100;
-      position: relative;
     }
     .topbar-brand { 
   display: flex; 
   align-items: center; 
   gap: 10px; 
 }
+.topbar-logo-box {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  overflow: hidden;
+  background: transparent;
+  flex-shrink: 0;
+}
+
     .topbar-logo-img {
   height: 44px;
   width: auto;
@@ -392,11 +403,13 @@
 <!-- ── Topbar ─────────────────────────────────────────────────────────────── -->
 <header class="topbar">
   <div class="topbar-brand">
+  <div class="topbar-logo-box">
     <img src="logo.png" alt="DIUD Logo" class="topbar-logo-img">
-    <div>
-      <div class="topbar-title">Decision Intelligence Using Data (DIUD)</div>
-      <div class="topbar-sub">Kore.ai</div>
-    </div>
+  </div>
+  <div>
+    <div class="topbar-title">Decision Intelligence Using Data (DIUD)</div>
+    <div class="topbar-sub">Kore.ai</div>
+  </div>
   </div>
   <div class="topbar-actions">
       <a href="/debug/db" target="_blank" class="debug-link" title="Test ClickHouse connectivity">
