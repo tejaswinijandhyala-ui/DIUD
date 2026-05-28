@@ -332,6 +332,176 @@ CORE RULES:
 - NEVER fabricate numbers. Query the DB for every metric.
 - NEVER run destructive SQL.
 - Answer in clean markdown with tables for data, bold for key numbers.
+
+=================================================================
+TARGET TABLES — QUOTAS, ATTAINMENT & GOVERNANCE
+=================================================================
+Use these tables for any question about targets, quotas, attainment,
+coverage, EOP, or pipeline governance.
+
+── TABLE T1: kore_ai_hubspot.gs_pipeline_quotas_v1 ─────────────
+PURPOSE: Global pipeline targets and quotas (org-wide).
+USE FOR:
+  • Revenue targets and pipeline targets
+  • EOP (End-of-Period) target tracking
+  • Quarterly / FY performance comparisons
+  • Attainment calculations: actual ÷ quota
+  • Gap-to-target analysis
+QUERY NOTES:
+  • Always GROUP BY + SUM for quota values (multiple rows per period)
+  • Join to hs_analytics.deals FINAL on fiscal period / region / stage
+    to compute attainment percentages
+
+── TABLE T2: kore_ai_hubspot.gs_partner_targets_region_wise ─────
+PURPOSE: Region-level partner targets.
+USE FOR:
+  • Regional partner performance analysis
+  • Partner pipeline contribution by region
+  • Region-wise quota tracking
+  • Partner attainment metrics vs regional targets
+
+── TABLE T3: kore_ai_hubspot.gs_partner_targets_psd ─────────────
+PURPOSE: Partner-level PSD (Partner Sales Director) targets.
+USE FOR:
+  • PSD-level performance tracking
+  • Partner contribution analysis at PSD granularity
+  • PSD quota attainment
+  • Partner pipeline governance metrics
+
+── TABLE T4: kore_ai_hubspot.gs_marketing_targets ───────────────
+(Already listed as TABLE 6 — same table, additional context below)
+USE FOR:
+  • Marketing-sourced pipeline analysis
+  • Campaign target tracking
+  • Marketing contribution vs targets
+  • Funnel performance (MQL → opportunity)
+QUERY NOTES:
+  • Always: SELECT region, mql_source, SUM(mql_target)
+    FROM kore_ai_hubspot.gs_marketing_targets GROUP BY region, mql_source
+
+── TABLE T5: kore_ai_hubspot.gs_closed_won_quotas ───────────────
+PURPOSE: Closed Won amount quotas and global pipeline governance targets.
+USE FOR:
+  • Closed Won attainment: actual won ÷ closed_won_quota
+  • Global pipeline governance reporting
+  • Revenue realization tracking
+  • Forecast vs actual analysis
+QUERY NOTES:
+  • Join to hs_analytics.deals FINAL where deal_stage = 'Closed Won'
+    on period / region to compute attainment %
+
+ATTAINMENT FORMULA (standard):
+  attainment_pct = round(actual_value / target_value * 100, 1)
+
+COVERAGE RATIO FORMULA:
+  coverage_ratio = round(pipeline_value / revenue_target, 1)
+
+=================================================================
+DASHBOARD DEFINITIONS — CONTEXT & KPI LOGIC
+=================================================================
+When a user asks about a specific dashboard (EOP, Exec KPI, CS,
+or Global Pipeline Governance), apply the correct logic below.
+
+── DASHBOARD 1: EOP (End-of-Period) DASHBOARD ──────────────────
+PURPOSE: Tracks pipeline health and attainment against EOP targets
+at the end of each fiscal quarter.
+
+KEY METRICS:
+  • EOP Pipeline Value — total amount of active deals within the
+    EOP date window. Source: hs_analytics.deals FINAL
+  • EOP Target — from kore_ai_hubspot.gs_pipeline_quotas_v1
+  • EOP Attainment % — EOP Pipeline ÷ EOP Target × 100
+  • Stage-wise EOP breakdown — pipeline bucketed by deal_stage
+  • Region-wise EOP — pipeline grouped by region
+
+FILTERS TO APPLY:
+  • Mandatory base filters on deals
+  • close_date within current quarter end window
+  • deal_stage IN active stages (20%–75%)
+  • pipeline = 'default'
+
+TYPICAL QUERIES:
+  "What is our EOP pipeline vs target for Q2 FY27?"
+  "Show EOP attainment by region"
+  "Gap to EOP target this quarter"
+
+── DASHBOARD 2: EXEC KPI DASHBOARD ─────────────────────────────
+PURPOSE: Senior leadership view of pipeline performance, win rates,
+and revenue attainment across all regions.
+
+KEY METRICS:
+  • Total Active Pipeline ($M) — sum(amount) on active deals
+  • Closed Won ($M) — sum(amount) where deal_stage = 'Closed Won'
+  • Closed Won Attainment % — Closed Won ÷ gs_closed_won_quotas × 100
+  • Win Rate % — Closed Won deals ÷ (Closed Won + Closed Lost) × 100
+  • Pipeline Coverage — Active Pipeline ÷ Revenue Target
+  • New Logo Count — countDistinct(deal_id) where deal_type = 'New Logo'
+  • ACV Weighted Pipeline — (stage_probability × amount) summed
+
+FILTERS TO APPLY:
+  • All mandatory base filters
+  • FY27 date range on close_date
+  • Exclude deal_stage IN ('Closed Won','Closed Lost') for active pipeline
+
+TYPICAL QUERIES:
+  "Executive KPI summary for FY27"
+  "Closed Won attainment vs quota by region"
+  "Win rate trend by quarter"
+
+── DASHBOARD 3: CS (Customer Success) DASHBOARD ────────────────
+PURPOSE: Tracks existing customer pipeline — renewals, upsells,
+expansions — and CS team performance.
+
+KEY METRICS:
+  • Renewal Pipeline ($M) — deals where deal_type LIKE '%Renewal%'
+  • Upsell / Expansion Pipeline ($M) — deal_type LIKE '%Upsell%'
+    or deal_type LIKE '%Expansion%'
+  • Renewal Win Rate % — Closed Won renewals ÷ total renewals × 100
+  • Net Revenue Retention (NRR) — (Renewals + Upsells) ÷ Base ARR
+  • At-Risk Deals — active deals with stale last_contacted date
+  • CS AE Performance — pipeline / closed won by owner filtered to
+    CS team (join to kore_ai_hubspot.gs_Teams on hubspot_team)
+
+FILTERS TO APPLY:
+  • All mandatory base filters
+  • deal_type IN ('Renewal','Upsell','Expansion') or similar values
+  • FY27 date range
+
+TYPICAL QUERIES:
+  "CS renewal pipeline for FY27"
+  "Upsell attainment by AE"
+  "At-risk renewals this quarter"
+
+── DASHBOARD 4: GLOBAL PIPELINE GOVERNANCE DASHBOARD ───────────
+PURPOSE: Executive governance view comparing pipeline across all
+regions, sources, and partner types against global targets.
+
+KEY METRICS:
+  • Global Pipeline by Region ($M) — broken down by region + stage
+  • Partner Pipeline ($M) — deals from partner sources
+    (deal_source_rollup LIKE '%Partner%')
+  • Partner Attainment % — vs kore_ai_hubspot.gs_partner_targets_region_wise
+  • Partner PSD Attainment % — vs kore_ai_hubspot.gs_partner_targets_psd
+  • Pipeline Coverage Ratio — by region vs gs_pipeline_quotas_v1
+  • Closed Won Governance — actual vs gs_closed_won_quotas by region/quarter
+  • Marketing Sourced Pipeline — deals from marketing sources
+    vs gs_marketing_targets
+
+FILTERS TO APPLY:
+  • All mandatory base filters
+  • FY27 date range
+  • Appropriate partner source filters for partner metrics
+
+TYPICAL QUERIES:
+  "Global pipeline governance report for FY27"
+  "Partner pipeline attainment by region"
+  "Closed Won vs quota by quarter"
+  "Marketing sourced pipeline vs targets"
+
+DASHBOARD SELECTION RULE:
+If the user mentions a specific dashboard by name, apply its metric
+definitions and target table references automatically. If unclear,
+ask the user which dashboard context they want.
 """
 
 _SYSTEM_PROMPT = _build_system_prompt()
@@ -682,6 +852,84 @@ def chat(payload: ChatRequest):
         "has_dataset":  has_dataset,
         "dataset_rows": stored.total_rows if stored else 0,
         "export_intent": "__EXPORT_INTENT__" in reply,
+    }
+
+
+# =============================================================================
+# Retry — re-runs the last user message with fresh LLM call
+# =============================================================================
+
+class RetryRequest(BaseModel):
+    """
+    Re-run the most recent user message with a fresh LLM call.
+
+    history    : full conversation UP TO AND INCLUDING the last user message.
+                 The last item must be role='user'. Any prior assistant reply
+                 for that turn is intentionally excluded so the model generates
+                 a new response.
+    session_id : existing session — query results from previous turns are
+                 preserved in the session store so exports still work.
+    """
+    history:    List[ChatMessage] = []
+    session_id: Optional[str] = None
+
+
+@app.post("/chat/retry")
+def chat_retry(payload: RetryRequest):
+    """
+    Regenerate the last assistant response without adding a new user message.
+
+    Steps:
+    1. Validate that the last history entry is a user message.
+    2. Remove the last assistant message if present (prevents duplicate in history).
+    3. Call Claude fresh with the same conversation context.
+    4. Return the new reply with the same response shape as /chat.
+
+    This preserves:
+    - Full conversation context (all prior turns)
+    - Session store (dataset / query results)
+    - Dashboard context embedded in history
+    """
+    if not payload.history:
+        raise HTTPException(status_code=400, detail="history must not be empty for retry.")
+
+    # Walk backwards: find the last user message and strip any trailing assistant
+    # message so we don't send the old answer as context for the regeneration.
+    clean_history = list(payload.history)
+
+    # Remove trailing assistant message(s) — they are the stale response being retried
+    while clean_history and clean_history[-1].role == "assistant":
+        clean_history.pop()
+
+    if not clean_history or clean_history[-1].role != "user":
+        raise HTTPException(
+            status_code=400,
+            detail="No user message found to retry. history must end with a user turn."
+        )
+
+    last_user_msg = clean_history[-1].content
+    prior_history = clean_history[:-1]   # everything before the last user message
+
+    print(f"🔄 [retry] session={payload.session_id} retrying: {last_user_msg[:80]}")
+
+    messages = [{"role": m.role, "content": m.content} for m in prior_history]
+    messages.append({"role": "user", "content": last_user_msg})
+
+    try:
+        reply = _call_claude(messages, session_id=payload.session_id)
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Claude error on retry: {exc}")
+
+    has_dataset = payload.session_id is not None and payload.session_id in _SESSION_STORE
+    stored      = _SESSION_STORE.get(payload.session_id) if payload.session_id else None
+
+    return {
+        "reply":         reply,
+        "has_dataset":   has_dataset,
+        "dataset_rows":  stored.total_rows if stored else 0,
+        "export_intent": "__EXPORT_INTENT__" in reply,
+        "retried":       True,
     }
 
 
