@@ -434,11 +434,14 @@ QUERY RULES
 1. SELECT / WITH only — never INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE
 2. Always use FINAL on all hs_analytics tables
 3. Always apply the 3 mandatory base filters on deals
-4. Always LIMIT row-level queries (max 100 rows)
-5. Use countDistinct(deal_id) for unique deal counts
-6. Use round(sum(amount)/1e6, 1) for $M dollar amounts
-7. Dates stored as strings — always cast: toDate(LEFT(coalesce(col,'1900-01-01'),10))
-8. Default fiscal year context is FY27 unless user specifies otherwise
+4. For AGGREGATION/SUMMARY queries (counts, totals, breakdowns): no row limit needed.
+5. For DEAL LIST queries (individual deal rows): do NOT add a LIMIT unless the user
+   explicitly asks for "top N" or "first N". Return ALL matching rows so the user
+   can export the complete dataset. The system will handle displaying them safely.
+6. Use countDistinct(deal_id) for unique deal counts
+7. Use round(sum(amount)/1e6, 1) for $M dollar amounts
+8. Dates stored as strings — always cast: toDate(LEFT(coalesce(col,'1900-01-01'),10))
+9. Default fiscal year context is FY27 unless user specifies otherwise
 
 CORE RULES:
 - NEVER say you lack database access. You always have it via the tool.
@@ -447,6 +450,8 @@ CORE RULES:
 - Answer in clean markdown: use tables for data, bold for key numbers.
 - Be concise but complete.
 - When generating export content, use ## section headers.
+- When returning a deal list, always tell the user the TOTAL count found (e.g.
+  "Found 256 deals matching your filters") even if the chat preview is condensed.
 
 """
 
@@ -524,21 +529,47 @@ def run_clickhouse_query(sql: str) -> str:
         if not rows:
             return "Query returned 0 rows."
 
+        total_rows = len(rows)
+        # Cap chat-display at 100 rows to keep the response readable,
+        # but embed the FULL dataset as a compact JSON block so the
+        # export pipeline can access every row.
+        CHAT_DISPLAY_LIMIT = 100
+
         if isinstance(rows[0], dict):
             cols   = list(rows[0].keys())
             header = " | ".join(cols)
+            display_rows = rows[:CHAT_DISPLAY_LIMIT]
             lines  = [header, "-" * min(len(header), 140)]
-            for row in rows[:100]:
+            for row in display_rows:
                 lines.append(" | ".join(str(row.get(c, "NULL")) for c in cols))
         else:
+            cols = None
+            display_rows = rows[1:CHAT_DISPLAY_LIMIT + 1]
             lines = [" | ".join(str(v) for v in rows[0]), "-" * 80]
-            for row in rows[1:101]:
+            for row in display_rows:
                 lines.append(" | ".join(str(v) for v in row))
 
-        if len(rows) > 100:
-            lines.append(f"... ({len(rows) - 100} more rows not shown)")
+        if total_rows > CHAT_DISPLAY_LIMIT:
+            lines.append(
+                f"\n📊 **Showing {CHAT_DISPLAY_LIMIT} of {total_rows} rows** in this preview. "
+                f"The full {total_rows} rows are available for export (PDF/CSV)."
+            )
 
-        result = "\n".join(lines)
+        # Embed the full dataset as a structured block for export use.
+        # This block is parsed by the export pipeline; Claude ignores it.
+        import json as _json
+        full_data = {
+            "total_rows": total_rows,
+            "columns": cols if cols else [],
+            "rows": rows  # all rows, not capped
+        }
+        full_block = (
+            "\n\n<!-- FULL_DATASET_JSON\n"
+            + _json.dumps(full_data, default=str)
+            + "\nEND_FULL_DATASET_JSON -->"
+        )
+
+        result = "\n".join(lines) + full_block
         return result
 
     except httpx.ConnectError as e:
@@ -582,7 +613,9 @@ _QUERY_TOOL = {
                 "description": (
                     "A valid ClickHouse SELECT or WITH query. "
                     "Use the exact database.table name from the schema. "
-                    "LIMIT row queries to 100."
+                    "For deal LIST queries, do NOT add a LIMIT clause unless the user asked for 'top N'. "
+                    "For aggregation/summary queries (GROUP BY, counts, totals) no limit is needed. "
+                    "Always return all rows matching the user's filters."
                 ),
             }
         },
@@ -615,6 +648,11 @@ class ExportDownloadRequest(BaseModel):
     format: Literal["pdf", "pptx"]
     content: str          # The pre-generated markdown content from preview
     title: str = "Pipeline Intelligence Report"
+
+class ExportCSVRequest(BaseModel):
+    """Request to export raw deal data as CSV, extracted from conversation history."""
+    conversation: List[ChatMessage] = []
+    title: str = "deals-export"
 
 
 # =============================================================================
@@ -705,6 +743,54 @@ def _call_claude(messages: list, max_tokens: int = 2048) -> str:
 # Export content generation — AI-driven document structuring
 # =============================================================================
 
+def _strip_dataset_block(text: str) -> str:
+    """Remove the hidden FULL_DATASET_JSON comment block from a message string."""
+    return re.sub(
+        r'\n*<!--\s*FULL_DATASET_JSON.*?END_FULL_DATASET_JSON\s*-->',
+        '',
+        text,
+        flags=re.DOTALL
+    ).strip()
+
+
+def _dataset_to_markdown_table(dataset: dict, max_rows: int = 5000) -> str:
+    """
+    Render the full dataset as a GitHub-flavoured markdown table.
+    max_rows is a safety cap to avoid unbounded memory use in the PDF builder.
+    """
+    rows    = dataset.get("rows", [])
+    columns = dataset.get("columns", [])
+    total   = dataset.get("total_rows", len(rows))
+
+    if not rows:
+        return "_No data returned._"
+
+    # Determine column names
+    if not columns and rows and isinstance(rows[0], dict):
+        columns = list(rows[0].keys())
+
+    # Header
+    header = "| " + " | ".join(str(c) for c in columns) + " |"
+    sep    = "| " + " | ".join("---" for _ in columns) + " |"
+    lines  = [header, sep]
+
+    for row in rows[:max_rows]:
+        if isinstance(row, dict):
+            cells = [str(row.get(c, "")) for c in columns]
+        else:
+            cells = [str(v) for v in row]
+        # Escape pipe chars inside cells
+        cells = [c.replace("|", "\\|") for c in cells]
+        lines.append("| " + " | ".join(cells) + " |")
+
+    if total > max_rows:
+        lines.append(f"\n_Showing {max_rows:,} of {total:,} rows._")
+    else:
+        lines.append(f"\n_Total: {total:,} rows._")
+
+    return "\n".join(lines)
+
+
 def _generate_export_content(
     conversation: List[ChatMessage],
     title: str,
@@ -715,20 +801,52 @@ def _generate_export_content(
     """
     Use Claude to intelligently structure the conversation into a
     well-formatted document. Returns markdown text.
+
+    When the conversation contains a full deal-list dataset (embedded via
+    FULL_DATASET_JSON), the complete rows are injected as a markdown table
+    in place of the truncated chat preview, so every row appears in the export.
     """
 
-    # Build conversation context
-    conv_text = "\n\n".join(
-        f"{'USER' if m.role == 'user' else 'DIUD AGENT'}: {m.content}"
-        for m in conversation
-    )
+    # Extract the full dataset once (used both to inject and to strip the block)
+    dataset = _extract_full_dataset(conversation)
+
+    # Build clean conversation text:
+    # - Strip the hidden JSON block from every assistant message
+    # - Replace the truncated preview notice with the full markdown table
+    conv_parts = []
+    for m in conversation:
+        role    = 'USER' if m.role == 'user' else 'DIUD AGENT'
+        content = _strip_dataset_block(m.content)
+
+        # If this assistant message had the truncated preview notice,
+        # append the full dataset table so Claude sees all rows
+        if (
+            m.role == 'assistant'
+            and dataset
+            and 'Showing' in m.content
+            and 'rows' in m.content.lower()
+        ):
+            full_table = _dataset_to_markdown_table(dataset)
+            # Remove the "Showing X of Y rows" notice and replace with full table
+            content = re.sub(
+                r'📊 \*\*Showing \d+ of \d+ rows\*\*.*',
+                '',
+                content,
+                flags=re.DOTALL
+            ).strip()
+            content = content + "\n\n**Full Deal List:**\n\n" + full_table
+
+        conv_parts.append(f"{role}: {content}")
+
+    conv_text = "\n\n".join(conv_parts)
 
     sections_hint = ""
     if sections_to_include:
         sections_hint = f"\nOnly include these sections: {', '.join(sections_to_include)}"
 
     detail_hint = (
-        "Include all data, tables, and detailed analysis from the conversation."
+        "Include all data, tables, and detailed analysis from the conversation. "
+        "The full deal list table above must appear verbatim in the document — do NOT summarise or truncate it."
         if detail_level == "detailed"
         else "Provide a high-level executive summary with key metrics and insights only."
     )
@@ -753,7 +871,8 @@ Create a well-structured {export_type.upper()} document titled "{title}".
 
 REQUIREMENTS:
 - Extract all key metrics, data tables, and insights from the conversation
-- Organize logically with clear sections
+- If a "Full Deal List" table is present in the conversation, include it completely in a dedicated ## Deal List section — preserve every row, do not truncate
+- Organise logically with clear sections
 - Preserve all numerical data accurately
 - Add an executive summary at the start
 - Include a "Key Recommendations" section at the end if insights warrant it
@@ -769,8 +888,10 @@ Generate the document content now:"""
         system="You are a professional business report writer. Generate clean, well-structured document content.",
         messages=messages,
         temperature=0,
-        max_tokens=4096,
+        max_tokens=8192,  # increased to handle large deal tables
     )
+
+
 
     return _extract_text(response.content)
 
@@ -874,21 +995,54 @@ def chat(payload: ChatRequest):
 async def export_preview(req: ExportPreviewRequest):
     """
     Generate a preview of the document from conversation context.
-    Returns the structured markdown content for display in the side panel.
+
+    When the conversation contains a full deal-list dataset, the complete
+    rows are rendered directly into the markdown content (no row cap).
+    Claude writes the narrative/summary; the table is injected verbatim.
     """
     if not req.conversation:
         raise HTTPException(status_code=400, detail="No conversation to export.")
 
     print(f"📄 [export/preview] type={req.export_type} detail={req.detail_level} msgs={len(req.conversation)}")
 
+    dataset       = _extract_full_dataset(req.conversation)
+    full_row_count = dataset.get("total_rows", 0) if dataset else 0
+
     try:
-        content = _generate_export_content(
+        # Step 1 — Claude generates the narrative document (summary, insights, etc.)
+        # The full table is intentionally kept out of the Claude prompt to avoid
+        # token waste; we inject it ourselves in Step 2.
+        ai_content = _generate_export_content(
             conversation=req.conversation,
             title=req.title,
             export_type=req.export_type,
             detail_level=req.detail_level,
             sections_to_include=req.sections_to_include,
         )
+
+        # Step 2 — If a full deal dataset exists, inject the complete table.
+        # Replace any placeholder/truncated table Claude may have written
+        # with the authoritative full-row version built from the raw data.
+        if dataset and full_row_count > 0:
+            full_table_md = _dataset_to_markdown_table(dataset)
+            total         = dataset.get("total_rows", 0)
+            section_header = f"\n\n## Deal List ({total:,} deals)\n\n"
+
+            # If Claude already wrote a Deal List section, replace its table body
+            if "## Deal List" in ai_content or "## deal list" in ai_content.lower():
+                # Remove everything from the Deal List header to the next ## or end
+                ai_content = re.sub(
+                    r'##\s*Deal List.*?(?=\n##|\Z)',
+                    section_header + full_table_md + "\n\n",
+                    ai_content,
+                    flags=re.DOTALL | re.IGNORECASE
+                )
+            else:
+                # Append the full table as a new section at the end
+                ai_content = ai_content.rstrip() + section_header + full_table_md
+
+        content = ai_content
+
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Content generation error: {exc}")
@@ -899,6 +1053,7 @@ async def export_preview(req: ExportPreviewRequest):
         "export_type": req.export_type,
         "word_count": len(content.split()),
         "generated_at": date.today().isoformat(),
+        "full_row_count": full_row_count,
     }
 
 
@@ -944,8 +1099,121 @@ def _safe_filename(title: str) -> str:
 
 
 # =============================================================================
-# PDF Builder
+# Full-dataset extraction — parses embedded JSON blocks from tool results
 # =============================================================================
+
+def _extract_full_dataset(conversation: List[ChatMessage]) -> dict | None:
+    """
+    Scan assistant messages for the embedded FULL_DATASET_JSON comment block
+    injected by run_clickhouse_query. Returns the most recent dataset found
+    (the last query result in the conversation), or None if not present.
+
+    The block format is:
+        <!-- FULL_DATASET_JSON
+        {"total_rows": N, "columns": [...], "rows": [...]}
+        END_FULL_DATASET_JSON -->
+    """
+    import json as _json
+    import re as _re
+
+    pattern = _re.compile(
+        r'<!--\s*FULL_DATASET_JSON\s*(.*?)\s*END_FULL_DATASET_JSON\s*-->',
+        _re.DOTALL
+    )
+
+    last_dataset = None
+    for msg in conversation:
+        if msg.role != "assistant":
+            continue
+        matches = pattern.findall(msg.content)
+        if matches:
+            # Take the last match in this message (most recent query)
+            try:
+                last_dataset = _json.loads(matches[-1].strip())
+            except Exception:
+                pass  # malformed block — skip
+
+    return last_dataset
+
+
+def _dataset_to_csv(dataset: dict) -> str:
+    """
+    Convert the extracted dataset dict to a UTF-8 CSV string.
+    Handles both list-of-dicts and list-of-lists row formats.
+    """
+    import csv
+    import io as _io
+
+    buf = _io.StringIO()
+    rows    = dataset.get("rows", [])
+    columns = dataset.get("columns", [])
+
+    if not rows:
+        return "No data available.\n"
+
+    # Determine column names
+    if columns:
+        fieldnames = columns
+    elif rows and isinstance(rows[0], dict):
+        fieldnames = list(rows[0].keys())
+    else:
+        fieldnames = [f"col_{i}" for i in range(len(rows[0]) if rows else 0)]
+
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore",
+                            lineterminator="\n")
+    writer.writeheader()
+
+    for row in rows:
+        if isinstance(row, dict):
+            writer.writerow(row)
+        elif isinstance(row, (list, tuple)):
+            writer.writerow(dict(zip(fieldnames, row)))
+
+    return buf.getvalue()
+
+
+# =============================================================================
+# NEW: CSV Export — streams the full raw dataset from the last query
+# =============================================================================
+
+@app.post("/export/csv")
+async def export_csv(req: ExportCSVRequest):
+    """
+    Extract the full (un-truncated) dataset embedded in the conversation by
+    run_clickhouse_query, and stream it as a downloadable CSV file.
+    All rows are exported — not just the 100-row chat preview.
+    """
+    if not req.conversation:
+        raise HTTPException(status_code=400, detail="No conversation to export.")
+
+    dataset = _extract_full_dataset(req.conversation)
+
+    if dataset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No query result found in this conversation. "
+                "Ask a deal-list question first (e.g. 'list all active pipeline deals'), "
+                "then export."
+            ),
+        )
+
+    total = dataset.get("total_rows", len(dataset.get("rows", [])))
+    print(f"📊 [export/csv] exporting {total} rows")
+
+    csv_text = _dataset_to_csv(dataset)
+
+    return StreamingResponse(
+        iter([csv_text.encode("utf-8")]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_safe_filename(req.title)}.csv"',
+            "X-Total-Rows": str(total),
+        },
+    )
+
+
+
 
 _C_NAVY  = colors.HexColor("#0D1B3E")
 _C_BLUE  = colors.HexColor("#1565C0")
