@@ -11,24 +11,26 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --navy:       #0D1B3E;
-      --navy-dark:  #080F22;
-      --blue:       #1565C0;
-      --blue-lt:    #E8F0FE;
-      --accent:     #1E88E5;
-      --green:      #2E7D32;
-      --red:        #B71C1C;
-      --amber:      #F59E0B;
-      --white:      #FFFFFF;
-      --bg:         #F4F6FA;
-      --card:       #FFFFFF;
-      --border:     #E2E8F0;
-      --txt-main:   #1E293B;
-      --txt-mid:    #475569;
-      --txt-dim:    #94A3B8;
-      --radius:     12px;
-      --shadow:     0 2px 16px rgba(13,27,62,.08);
-      --sidebar-w:  260px;
+      --navy:         #0D1B3E;
+      --navy-dark:    #080F22;
+      --blue:         #1565C0;
+      --blue-lt:      #E8F0FE;
+      --accent:       #1E88E5;
+      --green:        #2E7D32;
+      --red:          #B71C1C;
+      --amber:        #F59E0B;
+      --white:        #FFFFFF;
+      --bg:           #F4F6FA;
+      --card:         #FFFFFF;
+      --border:       #E2E8F0;
+      --txt-main:     #1E293B;
+      --txt-mid:      #475569;
+      --txt-dim:      #94A3B8;
+      --radius:       12px;
+      --shadow:       0 2px 16px rgba(13,27,62,.08);
+      --sidebar-w:    260px;
+      --panel-w:      480px;
+      --panel-trans:  all 0.38s cubic-bezier(0.4, 0, 0.2, 1);
     }
 
     body {
@@ -41,58 +43,67 @@
       overflow: hidden;
     }
 
+    /* ── Login Overlay ────────────────────────────────────────────────────── */
+    #login-overlay {
+      position: fixed; inset: 0; z-index: 9999;
+      background: linear-gradient(135deg, var(--navy-dark) 0%, var(--navy) 60%, #1a3a6e 100%);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .login-card {
+      background: rgba(255,255,255,.97);
+      border-radius: 20px;
+      padding: 48px 44px;
+      width: 380px;
+      box-shadow: 0 32px 80px rgba(0,0,0,.45);
+      display: flex; flex-direction: column; align-items: center; gap: 24px;
+    }
+    .login-logo { width: 72px; height: 72px; object-fit: contain; border-radius: 14px; }
+    .login-card h1 {
+      font-size: 20px; font-weight: 700; color: var(--navy);
+      text-align: center; line-height: 1.3;
+    }
+    .login-card h1 span { color: var(--accent); }
+    .login-fields { display: flex; flex-direction: column; gap: 14px; width: 100%; }
+    .login-field { display: flex; flex-direction: column; gap: 6px; }
+    .login-field label { font-size: 12px; font-weight: 600; color: var(--txt-mid); letter-spacing: .3px; }
+    .login-field input {
+      padding: 11px 14px; border-radius: 9px;
+      border: 1.5px solid var(--border); background: var(--bg);
+      font-family: inherit; font-size: 13.5px; color: var(--txt-main);
+      transition: border-color .15s; outline: none;
+    }
+    .login-field input:focus { border-color: var(--accent); background: white; }
+    .login-error { color: var(--red); font-size: 12px; min-height: 16px; text-align: center; }
+    .login-btn {
+      width: 100%; padding: 13px;
+      background: linear-gradient(135deg, #1565C0, #1E88E5);
+      color: white; border: none; border-radius: 10px;
+      font-size: 15px; font-weight: 700; cursor: pointer;
+      font-family: inherit; transition: opacity .15s;
+      box-shadow: 0 4px 20px rgba(30,136,229,.35);
+    }
+    .login-btn:hover { opacity: .88; }
+    .login-footer { font-size: 11px; color: #37474F; text-align: center; }
+
     /* ── Topbar ─────────────────────────────────────────────────────────── */
     .topbar {
       background: var(--navy);
       color: var(--white);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 24px;
-      height: 56px;
-      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 24px; height: 56px; flex-shrink: 0;
       box-shadow: 0 2px 8px rgba(0,0,0,.3);
       z-index: 100;
     }
-    .topbar-brand { 
-  display: flex; 
-  align-items: center; 
-  gap: 10px; 
-}
-.topbar-logo-box {
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  overflow: hidden;
-  background: transparent;
-  flex-shrink: 0;
-}
-
-    .topbar-logo-img {
-  height: 44px;
-  width: auto;
-  border-radius: 6px;
-  object-fit: contain;
-}
+    .topbar-brand { display: flex; align-items: center; gap: 10px; }
+    .topbar-logo-box {
+      width: 40px; height: 40px; display: flex; align-items: center;
+      justify-content: center; border-radius: 8px; overflow: hidden;
+      background: transparent; flex-shrink: 0;
+    }
+    .topbar-logo-img { height: 44px; width: auto; border-radius: 6px; object-fit: contain; }
     .topbar-title { font-size: 15px; font-weight: 600; letter-spacing: -.2px; }
     .topbar-sub   { font-size: 11px; color: #90A4AE; margin-top: 1px; }
     .topbar-actions { display: flex; gap: 8px; align-items: center; }
-
-    .export-btn {
-      display: flex; align-items: center; gap: 6px;
-      padding: 7px 14px; border-radius: 8px; border: none;
-      font-size: 12px; font-weight: 600; cursor: pointer;
-      transition: all .15s; font-family: inherit; letter-spacing: .2px;
-    }
-    .export-btn:disabled { opacity: .4; cursor: not-allowed; }
-    .btn-pdf  { background: #C62828; color: white; }
-    .btn-pdf:hover:not(:disabled)  { background: #B71C1C; }
-    .btn-pptx { background: #D84315; color: white; }
-    .btn-pptx:hover:not(:disabled) { background: #BF360C; }
-    .export-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
 
     .new-chat-btn {
       background: rgba(255,255,255,.1); color: white;
@@ -132,7 +143,7 @@
       border: 1px solid rgba(255,255,255,.07);
       background: rgba(255,255,255,.04);
       color: #B0BEC5; font-size: 11.5px; line-height: 1.45;
-      cursor: pointer; transition: all .15s;
+      cursor: pointer; transition: all .15s; text-align: left;
     }
     .suggestion-chip:hover {
       background: rgba(30,136,229,.18);
@@ -140,7 +151,6 @@
     }
     .sidebar-divider { border: none; border-top: 1px solid rgba(255,255,255,.06); margin: 6px 0; }
 
-    /* ── Connection status badge ─────────────────────────────────────────── */
     .conn-badge {
       display: flex; align-items: center; gap: 6px;
       padding: 8px 12px; border-radius: 8px; font-size: 11px;
@@ -162,6 +172,11 @@
     /* ── Chat pane ───────────────────────────────────────────────────────── */
     .chat-pane {
       flex: 1; display: flex; flex-direction: column; overflow: hidden;
+      transition: var(--panel-trans);
+      /* when export panel open, chat pane shrinks */
+    }
+    .body-wrap.panel-open .chat-pane {
+      /* do not force width; we let flex handle it */
     }
     .messages {
       flex: 1; overflow-y: auto;
@@ -191,33 +206,20 @@
 
     /* ── Message bubbles ─────────────────────────────────────────────────── */
     .msg { display: flex; gap: 12px; max-width: 860px; width: 100%; }
-    .msg.user { flex-direction: row-reverse; align-self: flex-end; }
+    .msg.user      { flex-direction: row-reverse; align-self: flex-end; }
     .msg.assistant { align-self: flex-start; }
-
     .msg-avatar {
       width: 34px; height: 34px; border-radius: 10px;
       display: flex; align-items: center; justify-content: center;
       font-size: 11px; font-weight: 700; flex-shrink: 0;
     }
-    .msg.user .msg-avatar      { background: var(--navy); color: white; }
-    .msg.assistant .msg-avatar { 
-  background: var(--navy-dark); 
-  padding: 4px;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.msg.assistant .msg-avatar img {
-  width: 100%; 
-  height: 100%; 
-  object-fit: contain; 
-  border-radius: 8px;
-}
-
+    .msg.user .msg-avatar { background: var(--navy); color: white; }
+    .msg.assistant .msg-avatar {
+      background: var(--navy-dark); padding: 4px; overflow: hidden;
+    }
+    .msg.assistant .msg-avatar img { width: 100%; height: 100%; object-fit: contain; border-radius: 8px; }
     .msg-body { display: flex; flex-direction: column; gap: 4px; max-width: calc(100% - 46px); }
     .msg.user .msg-body { align-items: flex-end; }
-
     .msg-bubble {
       padding: 12px 16px; border-radius: var(--radius);
       font-size: 13.5px; line-height: 1.6;
@@ -244,10 +246,9 @@
     .chat-md ul { padding-left: 18px; margin-bottom: 8px; }
     .chat-md li { margin-bottom: 4px; }
     .chat-md strong { font-weight: 600; }
-    .chat-md code  {
+    .chat-md code {
       background: #F1F5F9; padding: 2px 5px; border-radius: 4px;
-      font-family: 'JetBrains Mono', monospace; font-size: 12px;
-      color: #0D1B3E;
+      font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #0D1B3E;
     }
     .chat-md pre {
       background: #0D1B3E; color: #E2E8F0; padding: 14px;
@@ -255,15 +256,9 @@
       font-size: 12px; line-height: 1.6;
     }
     .chat-md pre code { background: none; color: inherit; padding: 0; }
-    .chat-md table {
-      border-collapse: collapse; font-size: 12px; margin: 10px 0;
-      width: 100%; min-width: 360px;
-    }
-    .chat-md th {
-      background: var(--navy); color: white;
-      padding: 8px 12px; text-align: left; font-weight: 600;
-    }
-    .chat-md td  { padding: 7px 12px; border-bottom: 1px solid var(--border); }
+    .chat-md table { border-collapse: collapse; font-size: 12px; margin: 10px 0; width: 100%; min-width: 360px; }
+    .chat-md th { background: var(--navy); color: white; padding: 8px 12px; text-align: left; font-weight: 600; }
+    .chat-md td { padding: 7px 12px; border-bottom: 1px solid var(--border); }
     .chat-md tr:nth-child(even) td { background: #F8FAFC; }
 
     /* ── Typing indicator ────────────────────────────────────────────────── */
@@ -274,25 +269,17 @@
     }
     .typing-dot:nth-child(2) { animation-delay: .15s; }
     .typing-dot:nth-child(3) { animation-delay: .3s; }
-    @keyframes bounce {
-      0%,100% { transform: translateY(0); }
-      50%      { transform: translateY(-6px); }
-    }
+    @keyframes bounce { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 
     /* ── Input area ──────────────────────────────────────────────────────── */
     .input-area {
-      padding: 16px 28px 20px;
-      background: var(--bg);
+      padding: 16px 28px 20px; background: var(--bg);
       border-top: 1px solid var(--border);
-      display: flex; flex-direction: column; gap: 10px;
-      flex-shrink: 0;
+      display: flex; flex-direction: column; gap: 10px; flex-shrink: 0;
     }
-    .input-row {
-      display: flex; gap: 10px; align-items: flex-end;
-    }
+    .input-row { display: flex; gap: 10px; align-items: flex-end; }
     #chat-input {
-      flex: 1;
-      padding: 12px 16px; border-radius: var(--radius);
+      flex: 1; padding: 12px 16px; border-radius: var(--radius);
       border: 1.5px solid var(--border); background: var(--card);
       font-family: inherit; font-size: 13.5px; color: var(--txt-main);
       resize: none; max-height: 140px; min-height: 48px;
@@ -300,80 +287,250 @@
     }
     #chat-input:focus { border-color: var(--accent); }
     #send-btn {
-      width: 44px; height: 44px; border-radius: 10px;
-      background: var(--navy); color: white; border: none;
-      cursor: pointer; display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0; transition: background .15s;
+      width: 48px; height: 48px; border-radius: 12px; flex-shrink: 0;
+      background: linear-gradient(135deg, #1565C0, #1E88E5);
+      color: white; border: none; cursor: pointer;
+      font-size: 15px; font-weight: 700; font-family: inherit;
+      transition: opacity .15s; box-shadow: 0 4px 20px rgba(30,136,229,.35);
+      display: flex; align-items: center; justify-content: center;
     }
-    #send-btn:hover:not(:disabled) { background: var(--blue); }
+    #send-btn:hover:not(:disabled) { opacity: .88; }
     #send-btn:disabled { opacity: .4; cursor: not-allowed; }
     #send-btn svg { width: 18px; height: 18px; }
-
-    .input-hint { font-size: 11px; color: var(--txt-dim); text-align: right; }
+    .input-hint { font-size: 11px; color: var(--txt-dim); }
 
     /* ── Toast ───────────────────────────────────────────────────────────── */
     #toast {
-      position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(20px);
-      background: #1E293B; color: white; padding: 10px 20px;
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
+      background: var(--navy); color: white; padding: 10px 20px;
       border-radius: 10px; font-size: 13px; font-weight: 500;
-      opacity: 0; transition: all .25s; pointer-events: none; z-index: 999;
+      opacity: 0; transition: all .25s; pointer-events: none; z-index: 9000;
       box-shadow: 0 4px 20px rgba(0,0,0,.25);
     }
     #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-    #toast.error { background: var(--red); }
     #toast.success { background: var(--green); }
+    #toast.error   { background: var(--red); }
 
-    /* ── Login Page ────────────────────────────────────────────────────────── */
-    #login-overlay {
-      position: fixed; inset: 0;
-      background: var(--navy-dark);
-      display: flex; align-items: center; justify-content: center;
-      z-index: 9999;
+    /* ================================================================
+       EXPORT SIDE PANEL — Claude-style
+       ================================================================ */
+
+    .export-panel {
+      width: 0;
+      min-width: 0;
+      background: var(--white);
+      border-left: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      transition: var(--panel-trans);
+      flex-shrink: 0;
+      position: relative;
+      box-shadow: -4px 0 24px rgba(13,27,62,.07);
     }
-    .login-card {
-      background: #0f1e3d;
-      border: 1px solid rgba(255,255,255,.1);
-      border-radius: 20px;
-      padding: 48px 44px;
-      width: 100%; max-width: 420px;
-      box-shadow: 0 24px 80px rgba(0,0,0,.5);
-      display: flex; flex-direction: column; align-items: center; gap: 28px;
+    .export-panel.open {
+      width: var(--panel-w);
+      min-width: var(--panel-w);
     }
-    .login-logo { height: 80px; width: auto; }
-    .login-card h1 {
-      font-size: 22px; font-weight: 700; color: white;
-      text-align: center; letter-spacing: -.3px; line-height: 1.3;
+
+    /* Panel header */
+    .ep-header {
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 14px;
+      flex-shrink: 0;
+      background: var(--white);
     }
-    .login-card h1 span { color: #42A5F5; }
-    .login-fields { width: 100%; display: flex; flex-direction: column; gap: 14px; }
-    .login-field {
-      display: flex; flex-direction: column; gap: 6px;
+    .ep-header-row {
+      display: flex; align-items: center; justify-content: space-between;
     }
-    .login-field label { font-size: 12px; font-weight: 600; color: #90A4AE; letter-spacing: .4px; text-transform: uppercase; }
-    .login-field input {
-      padding: 12px 16px;
-      background: rgba(255,255,255,.06);
-      border: 1.5px solid rgba(255,255,255,.12);
-      border-radius: 10px;
-      color: white; font-size: 14px; font-family: inherit;
-      outline: none; transition: border-color .15s;
+    .ep-title {
+      font-size: 14px; font-weight: 700; color: var(--navy);
+      display: flex; align-items: center; gap: 8px;
     }
-    .login-field input:focus { border-color: #1E88E5; }
-    .login-field input::placeholder { color: #546E7A; }
-    .login-error {
-      font-size: 12px; color: #EF5350; text-align: center;
-      min-height: 18px; font-weight: 500;
+    .ep-title svg { width: 16px; height: 16px; color: var(--accent); }
+    .ep-close {
+      width: 28px; height: 28px; border-radius: 7px; border: 1px solid var(--border);
+      background: transparent; cursor: pointer; display: flex; align-items: center;
+      justify-content: center; transition: all .15s; color: var(--txt-dim);
     }
-    .login-btn {
-      width: 100%; padding: 13px;
+    .ep-close:hover { background: var(--bg); color: var(--txt-main); }
+    .ep-close svg { width: 14px; height: 14px; }
+
+    /* Config controls */
+    .ep-config {
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .ep-config-row {
+      display: flex; gap: 8px; align-items: center;
+    }
+    .ep-input-group {
+      display: flex; flex-direction: column; gap: 4px; flex: 1;
+    }
+    .ep-label {
+      font-size: 10px; font-weight: 600; color: var(--txt-dim);
+      text-transform: uppercase; letter-spacing: .5px;
+    }
+    .ep-input {
+      padding: 7px 10px; border-radius: 7px; border: 1.5px solid var(--border);
+      font-family: inherit; font-size: 12.5px; color: var(--txt-main);
+      background: var(--bg); outline: none; transition: border-color .15s; width: 100%;
+    }
+    .ep-input:focus { border-color: var(--accent); background: white; }
+    .ep-select {
+      padding: 7px 10px; border-radius: 7px; border: 1.5px solid var(--border);
+      font-family: inherit; font-size: 12.5px; color: var(--txt-main);
+      background: var(--bg); outline: none; cursor: pointer;
+      transition: border-color .15s; appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2394A3B8'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 8px center; padding-right: 26px;
+    }
+    .ep-select:focus { border-color: var(--accent); background-color: white; }
+
+    /* Generate button */
+    .ep-generate-btn {
+      padding: 9px 18px; border-radius: 9px; border: none;
       background: linear-gradient(135deg, #1565C0, #1E88E5);
-      color: white; border: none; border-radius: 10px;
-      font-size: 15px; font-weight: 700; cursor: pointer;
-      font-family: inherit; letter-spacing: .2px;
-      transition: opacity .15s; box-shadow: 0 4px 20px rgba(30,136,229,.35);
+      color: white; font-size: 12.5px; font-weight: 600;
+      cursor: pointer; font-family: inherit; transition: opacity .15s;
+      display: flex; align-items: center; gap: 7px; justify-content: center;
+      box-shadow: 0 3px 12px rgba(30,136,229,.3);
+      white-space: nowrap;
     }
-    .login-btn:hover { opacity: .88; }
-    .login-footer { font-size: 11px; color: #37474F; text-align: center; }
+    .ep-generate-btn:hover:not(:disabled) { opacity: .88; }
+    .ep-generate-btn:disabled { opacity: .45; cursor: not-allowed; }
+    .ep-generate-btn svg { width: 14px; height: 14px; }
+
+    /* Panel body */
+    .ep-body {
+      flex: 1; overflow-y: auto; position: relative;
+    }
+    .ep-body::-webkit-scrollbar { width: 4px; }
+    .ep-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    /* Loading state */
+    .ep-loading {
+      display: none; flex-direction: column; align-items: center;
+      justify-content: center; height: 100%; gap: 20px; padding: 40px;
+    }
+    .ep-loading.visible { display: flex; }
+    .ep-spinner {
+      width: 44px; height: 44px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .ep-loading-text { font-size: 13px; color: var(--txt-mid); text-align: center; line-height: 1.6; }
+    .ep-loading-step {
+      font-size: 11px; color: var(--txt-dim); display: flex; align-items: center;
+      gap: 6px; animation: fadeInUp .4s ease;
+    }
+    .ep-loading-step.done { color: var(--green); }
+    .ep-loading-step svg { width: 12px; height: 12px; }
+    @keyframes fadeInUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* Empty state */
+    .ep-empty {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; height: 100%; gap: 14px; padding: 40px; text-align: center;
+    }
+    .ep-empty-icon {
+      width: 56px; height: 56px; border-radius: 14px;
+      background: linear-gradient(135deg, #E8F0FE, #DBEAFE);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .ep-empty-icon svg { width: 26px; height: 26px; color: var(--accent); }
+    .ep-empty h3 { font-size: 14px; font-weight: 600; color: var(--navy); }
+    .ep-empty p  { font-size: 12.5px; color: var(--txt-dim); max-width: 280px; line-height: 1.5; }
+
+    /* Preview content */
+    .ep-preview {
+      display: none; padding: 20px;
+    }
+    .ep-preview.visible { display: block; }
+    .ep-preview-meta {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 14px;
+      padding: 8px 12px; background: var(--blue-lt); border-radius: 8px;
+    }
+    .ep-preview-meta svg { width: 14px; height: 14px; color: var(--accent); }
+    .ep-preview-meta span { font-size: 11.5px; color: var(--blue); font-weight: 500; }
+
+    /* Rendered preview markdown */
+    .ep-md { font-size: 12.5px; line-height: 1.65; color: var(--txt-main); }
+    .ep-md h1 { font-size: 16px; font-weight: 700; color: var(--navy); margin: 0 0 12px; }
+    .ep-md h2 {
+      font-size: 13px; font-weight: 700; color: var(--white);
+      background: var(--navy); padding: 6px 10px; border-radius: 6px;
+      margin: 18px 0 8px;
+    }
+    .ep-md h3 { font-size: 12px; font-weight: 600; color: var(--blue); margin: 12px 0 4px; }
+    .ep-md p  { margin-bottom: 8px; }
+    .ep-md ul { padding-left: 16px; margin-bottom: 8px; }
+    .ep-md li { margin-bottom: 3px; }
+    .ep-md strong { font-weight: 600; color: var(--navy); }
+    .ep-md table { border-collapse: collapse; font-size: 11.5px; margin: 10px 0; width: 100%; }
+    .ep-md th { background: var(--navy); color: white; padding: 6px 10px; text-align: left; font-size: 11px; }
+    .ep-md td { padding: 5px 10px; border-bottom: 1px solid var(--border); }
+    .ep-md tr:nth-child(even) td { background: #F8FAFC; }
+    .ep-md blockquote {
+      border-left: 3px solid var(--accent); padding: 8px 12px;
+      background: var(--blue-lt); border-radius: 0 6px 6px 0;
+      margin: 8px 0; color: var(--txt-mid);
+    }
+    .ep-md code {
+      background: #F1F5F9; padding: 1px 4px; border-radius: 4px;
+      font-family: monospace; font-size: 11px;
+    }
+
+    /* Panel footer / download bar */
+    .ep-footer {
+      padding: 14px 20px;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+      display: flex; gap: 8px; align-items: center; flex-shrink: 0;
+    }
+    .ep-footer.hidden { display: none; }
+
+    .ep-download-btn {
+      flex: 1; padding: 10px 18px; border-radius: 9px; border: none;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      font-family: inherit; transition: all .15s;
+      display: flex; align-items: center; gap: 8px; justify-content: center;
+      box-shadow: 0 3px 12px rgba(0,0,0,.12);
+    }
+    .ep-download-btn:disabled { opacity: .45; cursor: not-allowed; }
+    .ep-download-btn svg { width: 15px; height: 15px; }
+    .btn-pdf-dl  { background: #C62828; color: white; }
+    .btn-pdf-dl:hover:not(:disabled)  { background: #B71C1C; }
+    .btn-pptx-dl { background: #D84315; color: white; }
+    .btn-pptx-dl:hover:not(:disabled) { background: #BF360C; }
+
+    .ep-regen-btn {
+      padding: 10px 12px; border-radius: 9px;
+      border: 1.5px solid var(--border);
+      background: white; color: var(--txt-mid);
+      cursor: pointer; font-family: inherit; font-size: 12px;
+      transition: all .15s; display: flex; align-items: center; gap: 6px;
+    }
+    .ep-regen-btn:hover { background: var(--bg); color: var(--txt-main); border-color: var(--accent); }
+    .ep-regen-btn svg { width: 14px; height: 14px; }
+
+    /* Progress bar */
+    .ep-progress-wrap {
+      padding: 0 20px 10px; display: none; flex-direction: column; gap: 4px;
+    }
+    .ep-progress-wrap.visible { display: flex; }
+    .ep-progress-label { font-size: 11px; color: var(--txt-dim); }
+    .ep-progress-bar {
+      height: 3px; background: var(--border); border-radius: 2px; overflow: hidden;
+    }
+    .ep-progress-fill {
+      height: 100%; background: linear-gradient(90deg, var(--blue), var(--accent));
+      border-radius: 2px; transition: width .5s ease;
+      width: 0%;
+    }
+
   </style>
 </head>
 <body>
@@ -403,39 +560,24 @@
 <!-- ── Topbar ─────────────────────────────────────────────────────────────── -->
 <header class="topbar">
   <div class="topbar-brand">
-  <div class="topbar-logo-box">
-    <img src="logo.png" alt="DIUD Logo" class="topbar-logo-img">
-  </div>
-  <div>
-    <div class="topbar-title">Decision Intelligence Using Data (DIUD)</div>
-    <div class="topbar-sub">Kore.ai</div>
-  </div>
+    <div class="topbar-logo-box">
+      <img src="logo.png" alt="DIUD Logo" class="topbar-logo-img">
+    </div>
+    <div>
+      <div class="topbar-title">Decision Intelligence Using Data (DIUD)</div>
+      <div class="topbar-sub">Kore.ai</div>
+    </div>
   </div>
   <div class="topbar-actions">
-      <a href="/debug/db" target="_blank" class="debug-link" title="Test ClickHouse connectivity">
+    <a href="/debug/db" target="_blank" class="debug-link" title="Test ClickHouse connectivity">
       🔌 Debug DB
     </a>
-    <button class="export-btn btn-pdf" id="btn-pdf" disabled onclick="doExport('pdf')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-        <polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/>
-        <line x1="9" y1="17" x2="15" y2="17"/><line x1="9" y1="9"  x2="11" y2="9"/>
-      </svg>
-      Export PDF
-    </button>
-    <button class="export-btn btn-pptx" id="btn-pptx" disabled onclick="doExport('pptx')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-        <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/>
-        <line x1="12" y1="17" x2="12" y2="21"/>
-      </svg>
-      Export PPTX
-    </button>
     <button class="new-chat-btn" onclick="newChat()">+ New Chat</button>
   </div>
 </header>
 
 <!-- ── Body ───────────────────────────────────────────────────────────────── -->
-<div class="body-wrap">
+<div class="body-wrap" id="body-wrap">
 
   <!-- Sidebar -->
   <aside class="sidebar">
@@ -463,11 +605,12 @@
 
     <hr class="sidebar-divider"/>
 
-    <div class="sidebar-label">🏭 Industry</div>
-    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Pipeline breakdown by industry</button>
-    <button class="suggestion-chip" onclick="sendSuggestion(this.textContent)">Financial Services deals in active pipeline</button>
+    <div class="sidebar-label">📥 Export</div>
+    <button class="suggestion-chip" onclick="sendSuggestion('Export this conversation as a PDF report')">📄 Export as PDF report</button>
+    <button class="suggestion-chip" onclick="sendSuggestion('Create a presentation from this conversation')">📊 Create a presentation</button>
+    <button class="suggestion-chip" onclick="sendSuggestion('Download a summary of today\'s analysis')">📋 Download summary</button>
 
-    <!-- Connection status — bottom of sidebar -->
+    <!-- Connection status -->
     <div id="conn-badge" class="conn-badge checking" style="margin-top:auto;"
          onclick="checkConn()" title="Click to recheck ClickHouse connection">
       <span class="dot"></span>
@@ -476,7 +619,7 @@
   </aside>
 
   <!-- Chat pane -->
-  <main class="chat-pane">
+  <main class="chat-pane" id="chat-pane">
     <div class="messages" id="messages">
       <div id="welcome">
         <div class="welcome-icon">
@@ -486,14 +629,15 @@
         </div>
         <h2>Hey, I'm DIUD 👋</h2>
         <p>I'm your Data Intelligence Agent here to help you analyse live ClickHouse or Web data.<br>
-           Ask me about pipeline deals, AE performance, win/loss analysis, BANT rates, regional breakdowns, and more.</p>
+           Ask me about pipeline deals, AE performance, win/loss analysis, BANT rates, regional breakdowns, and more.<br><br>
+           <em style="color:var(--txt-dim);font-size:12px;">💡 Tip: Type "export this as PDF" or "create a presentation" to export your analysis.</em></p>
       </div>
     </div>
 
     <div class="input-area">
       <div class="input-row">
         <textarea id="chat-input" rows="1"
-          placeholder="Ask about pipeline, deals, AEs, win rates…"
+          placeholder="Ask about pipeline, deals, AEs, win rates… or say 'export as PDF'"
           onkeydown="handleKey(event)"></textarea>
         <button id="send-btn" onclick="send()">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -505,31 +649,185 @@
       <div class="input-hint">Enter to send · Shift+Enter for new line</div>
     </div>
   </main>
-</div>
+
+  <!-- ── Export Side Panel ──────────────────────────────────────────────── -->
+  <aside class="export-panel" id="export-panel">
+
+    <!-- Panel header -->
+    <div class="ep-header">
+      <div class="ep-header-row">
+        <div class="ep-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="9" y1="13" x2="15" y2="13"/>
+            <line x1="9" y1="17" x2="15" y2="17"/>
+          </svg>
+          Export Document
+        </div>
+        <button class="ep-close" onclick="closeExportPanel()" title="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Config controls -->
+      <div class="ep-config">
+        <div class="ep-input-group">
+          <div class="ep-label">Document Title</div>
+          <input class="ep-input" id="ep-title" type="text" value="Pipeline Intelligence Report" placeholder="Report title…">
+        </div>
+        <div class="ep-config-row">
+          <div class="ep-input-group">
+            <div class="ep-label">Format</div>
+            <select class="ep-select" id="ep-format">
+              <option value="pdf">📄 PDF Report</option>
+              <option value="pptx">📊 PowerPoint</option>
+            </select>
+          </div>
+          <div class="ep-input-group">
+            <div class="ep-label">Detail Level</div>
+            <select class="ep-select" id="ep-detail">
+              <option value="detailed">Detailed</option>
+              <option value="summary">Summary</option>
+            </select>
+          </div>
+        </div>
+        <button class="ep-generate-btn" id="ep-generate-btn" onclick="generatePreview()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <circle cx="12" cy="12" r="10"/>
+            <polygon points="10 8 16 12 10 16 10 8"/>
+          </svg>
+          Generate Preview
+        </button>
+      </div>
+    </div>
+
+    <!-- Progress bar (during generation) -->
+    <div class="ep-progress-wrap" id="ep-progress-wrap">
+      <div class="ep-progress-label" id="ep-progress-label">Analysing conversation…</div>
+      <div class="ep-progress-bar">
+        <div class="ep-progress-fill" id="ep-progress-fill"></div>
+      </div>
+    </div>
+
+    <!-- Body: loading / empty / preview -->
+    <div class="ep-body" id="ep-body">
+
+      <!-- Empty state -->
+      <div class="ep-empty" id="ep-empty">
+        <div class="ep-empty-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+          </svg>
+        </div>
+        <h3>Configure & Preview</h3>
+        <p>Set your document title, format, and detail level above, then click <strong>Generate Preview</strong> to see a formatted preview before downloading.</p>
+      </div>
+
+      <!-- Loading state -->
+      <div class="ep-loading" id="ep-loading">
+        <div class="ep-spinner"></div>
+        <div class="ep-loading-text">
+          <strong>AI is preparing your document…</strong><br>
+          <span style="font-size:11.5px;color:var(--txt-dim)">Extracting insights from your conversation</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;width:100%;max-width:280px;" id="ep-steps">
+          <!-- Steps added dynamically -->
+        </div>
+      </div>
+
+      <!-- Preview content -->
+      <div class="ep-preview" id="ep-preview">
+        <div class="ep-preview-meta" id="ep-preview-meta">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+          <span id="ep-preview-meta-text">Preview ready</span>
+        </div>
+        <div class="ep-md" id="ep-preview-content"></div>
+      </div>
+
+    </div><!-- /ep-body -->
+
+    <!-- Footer download buttons -->
+    <div class="ep-footer hidden" id="ep-footer">
+      <button class="ep-regen-btn" onclick="generatePreview()" title="Regenerate">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+        Regenerate
+      </button>
+      <button class="ep-download-btn btn-pdf-dl" id="ep-dl-pdf" onclick="downloadDoc('pdf')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Download PDF
+      </button>
+      <button class="ep-download-btn btn-pptx-dl" id="ep-dl-pptx" onclick="downloadDoc('pptx')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Download PPTX
+      </button>
+    </div>
+
+  </aside><!-- /export-panel -->
+
+</div><!-- /body-wrap -->
 
 <div id="toast"></div>
 
 <script>
-  /* ── State ──────────────────────────────────────────────────────────────── */
-  let history = [];
-  let busy    = false;
+  /* ======================================================================
+     STATE
+     ====================================================================== */
+  let history       = [];        // chat history [{role, content}]
+  let busy          = false;     // chat in-flight
+  let panelOpen     = false;     // export panel visible?
+  let previewContent = null;     // last generated markdown content
+  let exportBusy    = false;     // export generation in-flight
 
+  /* ======================================================================
+     EXPORT INTENT DETECTION — recognise when user wants to export
+     ====================================================================== */
+  const EXPORT_PATTERNS = [
+    /export\s+(this|the|my|our)?\s*(conversation|chat|analysis|data|report|session)?/i,
+    /download\s+(as|this|the)?\s*(pdf|pptx|powerpoint|report|presentation|doc)/i,
+    /create\s+(a|this)?\s*(pdf|pptx|presentation|deck|report|document|slide)/i,
+    /generate\s+(a|the)?\s*(report|pdf|pptx|presentation|document|summary)/i,
+    /save\s+(this|as)?\s*(pdf|pptx|report|presentation|document)/i,
+    /make\s+(a|this)?\s*(pdf|pptx|report|presentation|document|summary)/i,
+    /turn\s+(this|the)?\s*(into|to)\s*(a)?\s*(pdf|pptx|presentation|report|document)/i,
+    /convert\s+(this|to)?\s*(pdf|pptx|presentation|report)/i,
+  ];
 
-  /* ── Login ───────────────────────────────────────────────────────────────── */
-  // Simple credential check — replace with server-side auth for production
-  const VALID_USERS = {
-    "diud":  "DiuD@2026"
-  };
+  function detectExportIntent(text) {
+    return EXPORT_PATTERNS.some(p => p.test(text));
+  }
+
+  function detectExportFormat(text) {
+    if (/pptx|powerpoint|presentation|slide|deck/i.test(text)) return 'pptx';
+    if (/pdf/i.test(text)) return 'pdf';
+    return null; // user didn't specify
+  }
+
+  /* ======================================================================
+     LOGIN
+     ====================================================================== */
+  const VALID_USERS = { "diud": "DiuD@2026" };
 
   function doLogin() {
     const user = document.getElementById("login-user").value.trim();
     const pass = document.getElementById("login-pass").value;
     const err  = document.getElementById("login-error");
-
-    if (!user || !pass) {
-      err.textContent = "Please enter username and password.";
-      return;
-    }
+    if (!user || !pass) { err.textContent = "Please enter username and password."; return; }
     if (VALID_USERS[user.toLowerCase()] === pass) {
       document.getElementById("login-overlay").style.display = "none";
       err.textContent = "";
@@ -539,27 +837,30 @@
       document.getElementById("login-pass").focus();
     }
   }
-
-  // Allow Enter key on username to jump to password
   document.getElementById("login-user").addEventListener("keydown", function(e) {
     if (e.key === "Enter") document.getElementById("login-pass").focus();
   });
 
-  /* ── marked.js config ────────────────────────────────────────────────────── */
+  /* ======================================================================
+     MARKED CONFIG
+     ====================================================================== */
   marked.setOptions({ breaks: true, gfm: true });
 
-  /* ── Auto-resize textarea ────────────────────────────────────────────────── */
+  /* ======================================================================
+     AUTO-RESIZE TEXTAREA
+     ====================================================================== */
   const input = document.getElementById("chat-input");
   input.addEventListener("input", () => {
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, 140) + "px";
   });
-
   function handleKey(e) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   }
 
-  /* ── Send ────────────────────────────────────────────────────────────────── */
+  /* ======================================================================
+     SEND MESSAGE
+     ====================================================================== */
   async function send() {
     const text = input.value.trim();
     if (!text || busy) return;
@@ -573,8 +874,31 @@
     input.style.height = "auto";
     setBusy(true);
 
-    const typingId = addTyping();
+    // --- Export intent detection ---
+    if (detectExportIntent(text)) {
+      const fmt = detectExportFormat(text);
 
+      // Respond in chat
+      const typingId = addTyping();
+      await sleep(400);
+      removeTyping(typingId);
+
+      const exportMsg = `📄 **Opening export panel...**\n\nI'll prepare a document from our conversation. ` +
+        (fmt ? `I detected you want a **${fmt.toUpperCase()}** — I've pre-selected that for you.` :
+               `You can choose PDF or PowerPoint in the side panel.`) +
+        `\n\nConfigure the options in the panel and click **Generate Preview** to see a formatted preview before downloading.`;
+
+      appendBubble("assistant", exportMsg);
+      history.push({ role: "assistant", content: exportMsg });
+      setBusy(false);
+
+      // Open panel with pre-filled format if detected
+      openExportPanel(fmt);
+      return;
+    }
+
+    // --- Normal chat flow ---
+    const typingId = addTyping();
     try {
       const res = await fetch("/chat", {
         method:  "POST",
@@ -589,10 +913,9 @@
       removeTyping(typingId);
       appendBubble("assistant", data.reply);
       history.push({ role: "assistant", content: data.reply });
-      updateExportButtons();
     } catch (err) {
       removeTyping(typingId);
-      appendBubble("assistant", `⚠️ **Error:** ${err.message}\n\nCheck the server logs or open [/debug/clickhouse](/debug/clickhouse) to diagnose connectivity.`);
+      appendBubble("assistant", `⚠️ **Error:** ${err.message}`);
       showToast("Error: " + err.message, "error");
     } finally {
       setBusy(false);
@@ -604,17 +927,18 @@
     send();
   }
 
-  /* ── Bubble helpers ──────────────────────────────────────────────────────── */
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  /* ======================================================================
+     BUBBLE HELPERS
+     ====================================================================== */
   function appendBubble(role, content) {
     const msgs = document.getElementById("messages");
     const now  = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
-    const div = document.createElement("div");
+    const div  = document.createElement("div");
     div.className = `msg ${role}`;
-
     const initials = role === "user" ? "YOU" : '<img src="logo.png" alt="DIUD">';
-    let   body;
-
+    let body;
     if (role === "assistant") {
       body = `<div class="msg-bubble chat-md">${marked.parse(content)}</div>
               <div class="msg-time">${now}</div>`;
@@ -622,10 +946,7 @@
       body = `<div class="msg-bubble">${escapeHtml(content)}</div>
               <div class="msg-time">${now}</div>`;
     }
-
-    div.innerHTML = `
-      <div class="msg-avatar">${initials}</div>
-      <div class="msg-body">${body}</div>`;
+    div.innerHTML = `<div class="msg-avatar">${initials}</div><div class="msg-body">${body}</div>`;
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
   }
@@ -634,13 +955,14 @@
     return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   }
 
-  /* ── Typing indicator ────────────────────────────────────────────────────── */
+  /* ======================================================================
+     TYPING INDICATOR
+     ====================================================================== */
   function addTyping() {
-    const id  = "typing-" + Date.now();
+    const id   = "typing-" + Date.now();
     const msgs = document.getElementById("messages");
-    const div = document.createElement("div");
-    div.id = id;
-    div.className = "msg assistant";
+    const div  = document.createElement("div");
+    div.id = id; div.className = "msg assistant";
     div.innerHTML = `
       <div class="msg-avatar"><img src="logo.png" alt="DIUD"></div>
       <div class="msg-body">
@@ -656,64 +978,217 @@
     msgs.scrollTop = msgs.scrollHeight;
     return id;
   }
+  function removeTyping(id) { const el = document.getElementById(id); if (el) el.remove(); }
 
-  function removeTyping(id) {
-    const el = document.getElementById(id);
-    if (el) el.remove();
-  }
-
-  /* ── Busy state ──────────────────────────────────────────────────────────── */
+  /* ======================================================================
+     BUSY STATE
+     ====================================================================== */
   function setBusy(state) {
     busy = state;
     document.getElementById("send-btn").disabled  = state;
     document.getElementById("chat-input").disabled = state;
   }
 
-  function updateExportButtons() {
-    const hasChat = history.length > 0;
-    document.getElementById("btn-pdf").disabled  = !hasChat;
-    document.getElementById("btn-pptx").disabled = !hasChat;
+  /* ======================================================================
+     EXPORT PANEL OPEN / CLOSE
+     ====================================================================== */
+  function openExportPanel(preselectedFormat) {
+    panelOpen = true;
+    document.getElementById("export-panel").classList.add("open");
+    document.getElementById("body-wrap").classList.add("panel-open");
+
+    // Reset panel to empty/config state
+    showPanelState("empty");
+    hideFooter();
+    previewContent = null;
+
+    // Pre-fill format if detected
+    if (preselectedFormat) {
+      document.getElementById("ep-format").value = preselectedFormat;
+    }
+
+    // Fill title from context (first user message or default)
+    if (history.length > 0 && document.getElementById("ep-title").value === "Pipeline Intelligence Report") {
+      // keep default
+    }
   }
 
-  /* ── Export ──────────────────────────────────────────────────────────────── */
-  async function doExport(format) {
-    if (busy || !history.length) return;
-    setBusy(true);
-    showToast(`Generating ${format.toUpperCase()}… (this may take ~30s)`, "");
+  function closeExportPanel() {
+    panelOpen = false;
+    document.getElementById("export-panel").classList.remove("open");
+    document.getElementById("body-wrap").classList.remove("panel-open");
+  }
+
+  /* ======================================================================
+     PANEL STATE HELPERS
+     ====================================================================== */
+  function showPanelState(state) {
+    document.getElementById("ep-empty").style.display   = state === "empty"   ? "flex"  : "none";
+    document.getElementById("ep-loading").classList.toggle("visible", state === "loading");
+    document.getElementById("ep-preview").classList.toggle("visible", state === "preview");
+    document.getElementById("ep-progress-wrap").classList.toggle("visible", state === "loading");
+  }
+
+  function hideFooter()  { document.getElementById("ep-footer").classList.add("hidden"); }
+  function showFooter()  { document.getElementById("ep-footer").classList.remove("hidden"); }
+
+  /* ======================================================================
+     GENERATE PREVIEW
+     ====================================================================== */
+  async function generatePreview() {
+    if (exportBusy) return;
+    if (history.length === 0) {
+      showToast("Start a conversation first before exporting.", "error");
+      return;
+    }
+
+    const title    = document.getElementById("ep-title").value.trim() || "Pipeline Intelligence Report";
+    const format   = document.getElementById("ep-format").value;
+    const detail   = document.getElementById("ep-detail").value;
+
+    exportBusy = true;
+    document.getElementById("ep-generate-btn").disabled = true;
+    hideFooter();
+    showPanelState("loading");
+
+    // Animate loading steps
+    const steps = [
+      "Reading conversation context…",
+      "Extracting data & metrics…",
+      "Structuring document sections…",
+      "Formatting content…",
+    ];
+    const stepsEl = document.getElementById("ep-steps");
+    stepsEl.innerHTML = "";
+    setProgress(5, steps[0]);
+
+    for (let i = 0; i < steps.length; i++) {
+      await sleep(i === 0 ? 200 : 600);
+      const step = document.createElement("div");
+      step.className = "ep-loading-step";
+      step.innerHTML = `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>${steps[i]}`;
+      stepsEl.appendChild(step);
+      setProgress(15 + i * 20, steps[Math.min(i + 1, steps.length - 1)]);
+    }
 
     try {
-      const res = await fetch(`/export/${format}`, {
+      setProgress(75, "AI generating document…");
+      const res = await fetch("/export/preview", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
-          format,
           conversation: history,
-          title: "Pipeline Intelligence Report",
+          title,
+          export_type: format,
+          detail_level: detail,
         }),
       });
+
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
+
+      const data = await res.json();
+      previewContent = data.content;
+
+      setProgress(100, "Done!");
+      await sleep(400);
+
+      // Render preview
+      document.getElementById("ep-preview-content").innerHTML = marked.parse(previewContent);
+      document.getElementById("ep-preview-meta-text").textContent =
+        `Preview ready · ${data.word_count} words · Generated ${data.generated_at}`;
+
+      showPanelState("preview");
+      showFooter();
+
+      // Show correct download buttons
+      const isPDF  = format === "pdf";
+      document.getElementById("ep-dl-pdf").style.display  = isPDF  ? "flex" : "none";
+      document.getElementById("ep-dl-pptx").style.display = !isPDF ? "flex" : "none";
+
+    } catch (err) {
+      showPanelState("empty");
+      showToast("Preview generation failed: " + err.message, "error");
+      appendBubble("assistant", `⚠️ **Export preview failed:** ${err.message}`);
+    } finally {
+      exportBusy = false;
+      document.getElementById("ep-generate-btn").disabled = false;
+    }
+  }
+
+  function setProgress(pct, label) {
+    document.getElementById("ep-progress-fill").style.width = pct + "%";
+    document.getElementById("ep-progress-label").textContent = label;
+  }
+
+  /* ======================================================================
+     DOWNLOAD FINAL DOCUMENT
+     ====================================================================== */
+  async function downloadDoc(format) {
+    if (!previewContent) { showToast("Generate a preview first.", "error"); return; }
+
+    const title = document.getElementById("ep-title").value.trim() || "Pipeline Intelligence Report";
+    const dlBtn = document.getElementById(format === "pdf" ? "ep-dl-pdf" : "ep-dl-pptx");
+
+    dlBtn.disabled = true;
+    dlBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:15px;height:15px;">
+      <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
+      <path d="M12 8v4l3 3"/>
+    </svg>Building ${format.toUpperCase()}…`;
+    showToast(`Building ${format.toUpperCase()}… this may take a moment.`, "");
+
+    try {
+      const res = await fetch("/export/download", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ format, content: previewContent, title }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+
       const blob = await res.blob();
       const ext  = format === "pdf" ? "pdf" : "pptx";
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a");
       a.href     = url;
-      a.download = `pipeline-report.${ext}`;
+      a.download = `${title.replace(/\s+/g,"_")}.${ext}`;
       a.click();
       URL.revokeObjectURL(url);
-      showToast(`${format.toUpperCase()} downloaded!`, "success");
+      showToast(`✅ ${format.toUpperCase()} downloaded!`, "success");
+
     } catch (err) {
-      showToast("Export failed: " + err.message, "error");
+      showToast("Download failed: " + err.message, "error");
     } finally {
-      setBusy(false);
+      // Restore button
+      if (format === "pdf") {
+        dlBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="width:15px;height:15px;">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>Download PDF`;
+      } else {
+        dlBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="width:15px;height:15px;">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>Download PPTX`;
+      }
+      dlBtn.disabled = false;
     }
   }
 
-  /* ── New chat ────────────────────────────────────────────────────────────── */
+  /* ======================================================================
+     NEW CHAT
+     ====================================================================== */
   function newChat() {
     history = [];
+    previewContent = null;
     const msgs = document.getElementById("messages");
     msgs.innerHTML = `
       <div id="welcome">
@@ -722,14 +1197,17 @@
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
           </svg>
         </div>
-        <h2>Decision Intelligence Using Data (DIUD)</h2>
+        <h2>Hey, I'm DIUD 👋</h2>
         <p>I'm your Data Intelligence Agent here to help you analyse live ClickHouse or Web data.<br>
-           Ask me about pipeline deals, AE performance, win/loss analysis, BANT rates, regional breakdowns, and more.</p>
+           Ask me about pipeline deals, AE performance, win/loss analysis, BANT rates, regional breakdowns, and more.<br><br>
+           <em style="color:var(--txt-dim);font-size:12px;">💡 Tip: Type "export this as PDF" or "create a presentation" to export your analysis.</em></p>
       </div>`;
-    updateExportButtons();
+    if (panelOpen) closeExportPanel();
   }
 
-  /* ── Toast ───────────────────────────────────────────────────────────────── */
+  /* ======================================================================
+     TOAST
+     ====================================================================== */
   let _toastTimer;
   function showToast(msg, type = "") {
     const t = document.getElementById("toast");
@@ -739,16 +1217,18 @@
     _toastTimer = setTimeout(() => { t.className = ""; }, 4000);
   }
 
-  /* ── Connection health check ─────────────────────────────────────────────── */
+  /* ======================================================================
+     CONNECTION HEALTH CHECK
+     ====================================================================== */
   async function checkConn() {
     const badge = document.getElementById("conn-badge");
     const label = document.getElementById("conn-label");
     badge.className = "conn-badge checking";
     label.textContent = "Checking…";
     try {
-      const res  = await fetch("/debug/db");          // ← correct endpoint
+      const res  = await fetch("/debug/db");
       const data = await res.json();
-      if (data.status === "OK") {                      // ← correct field
+      if (data.status === "OK") {
         badge.className  = "conn-badge ok";
         label.textContent = "DB Connected ✓";
       } else {
