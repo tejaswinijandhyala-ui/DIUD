@@ -505,6 +505,8 @@
     .btn-pdf-dl:hover:not(:disabled)  { background: #B71C1C; }
     .btn-pptx-dl { background: #D84315; color: white; }
     .btn-pptx-dl:hover:not(:disabled) { background: #BF360C; }
+    .btn-csv-dl  { background: #1B5E20; color: white; }
+    .btn-csv-dl:hover:not(:disabled)  { background: #2E7D32; }
 
     .ep-regen-btn {
       padding: 10px 12px; border-radius: 9px;
@@ -776,6 +778,7 @@
         </svg>
         Download PPTX
       </button>
+      <!-- CSV: full dataset is now included inside PDF/PPTX automatically -->
     </div>
 
   </aside><!-- /export-panel -->
@@ -1180,6 +1183,50 @@
         </svg>Download PPTX`;
       }
       dlBtn.disabled = false;
+    }
+  }
+
+  /* ======================================================================
+     DOWNLOAD CSV — exports the full un-truncated deal dataset
+     ====================================================================== */
+  async function downloadCSV() {
+    const csvBtn = document.getElementById("ep-dl-csv");
+    const title  = document.getElementById("ep-title").value.trim() || "deals-export";
+    const count  = document.getElementById("ep-csv-count").textContent;
+
+    csvBtn.disabled = true;
+    const origHTML  = csvBtn.innerHTML;
+    csvBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:15px;height:15px;">
+      <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+    </svg>Building CSV…`;
+    showToast(`Preparing ${count} rows as CSV…`, "");
+
+    try {
+      const res = await fetch("/export/csv", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ conversation: history, title }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href     = url;
+      a.download = `${title.replace(/\s+/g, "_")}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast(`✅ CSV exported — all ${count} rows!`, "success");
+
+    } catch (err) {
+      showToast("CSV export failed: " + err.message, "error");
+    } finally {
+      csvBtn.innerHTML = origHTML;
+      csvBtn.disabled  = false;
     }
   }
 
