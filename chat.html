@@ -236,6 +236,37 @@
     }
     .msg-time { font-size: 10.5px; color: var(--txt-dim); padding: 0 4px; }
 
+    /* ── Message action row (retry, copy) ────────────────────────────────── */
+    /* ── Error bubble + Retry button ────────────────────────────────────── */
+    .msg-error-wrap {
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .msg-error-bubble {
+      padding: 12px 16px; border-radius: var(--radius);
+      font-size: 13.5px; line-height: 1.6;
+      background: #FFF5F5; color: #7B1A1A;
+      border: 1px solid #FECACA;
+      border-radius: 4px var(--radius) var(--radius) var(--radius);
+      box-shadow: 0 1px 4px rgba(0,0,0,.06);
+    }
+    .msg-retry-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 8px;
+      border: 1.5px solid var(--accent);
+      background: white; color: var(--accent);
+      font-size: 12px; font-weight: 600; cursor: pointer;
+      font-family: inherit; transition: all .15s;
+      align-self: flex-start;
+    }
+    .msg-retry-btn:hover:not(:disabled) { background: var(--blue-lt); }
+    .msg-retry-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .msg-retry-btn svg { width: 13px; height: 13px; }
+    .msg-retry-btn.retrying {
+      color: var(--accent); border-color: var(--accent);
+      animation: pulse-btn .8s infinite alternate;
+    }
+    @keyframes pulse-btn { to { opacity: .4; } }
+
     /* Markdown inside assistant bubbles */
     .chat-md { overflow-x: auto; }
     .chat-md p  { margin-bottom: 8px; }
@@ -915,7 +946,8 @@
 
     } catch (err) {
       removeTyping(typingId);
-      appendBubble("assistant", `⚠️ **Error:** ${err.message}`);
+      // Show error bubble with Retry button — store the original message so retry can resend it
+      appendErrorBubble(err.message, { message: text, historyLen: history.length });
       showToast("Error: " + err.message, "error");
     } finally {
       setBusy(false);
@@ -928,6 +960,90 @@
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  /* ======================================================================
+     RETRY — re-send the original user message after an error
+     Only appears on error bubbles, not on normal responses.
+     ====================================================================== */
+  async function retryError(errorId) {
+    if (busy) return;
+
+    // Find the error bubble DOM element
+    const errEl   = document.querySelector(`[data-error-id="${errorId}"]`);
+    const btn     = document.getElementById(`retrybtn-${errorId}`);
+    const origMsg = errEl ? errEl.dataset.retryMsg : "";
+
+    if (!origMsg) { showToast("Nothing to retry.", "error"); return; }
+
+    // Show retrying state on the button
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add("retrying");
+      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+        <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+      </svg> Retrying…`;
+    }
+    setBusy(true);
+
+    // Build messages: full history (no failed assistant entry was added for errors)
+    // plus the original user message that failed
+    const messages = history.map(m => ({ role: m.role, content: m.content }));
+    messages.push({ role: "user", content: origMsg });
+
+    try {
+      const res = await fetch("/chat", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+          message:    origMsg,
+          history:    history,
+          session_id: SESSION_ID,
+        }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+
+      if (data.dataset_rows > 0) {
+        datasetRows = data.dataset_rows;
+        updateDatasetBadge();
+      }
+
+      // Remove the error bubble — replace with the successful response
+      if (errEl) errEl.remove();
+
+      const reply = data.export_intent
+        ? data.reply.replace("__EXPORT_INTENT__", "").trim()
+        : data.reply;
+
+      // Re-add the user bubble (it was never added since the error happened mid-send)
+      appendBubble("user", origMsg);
+      history.push({ role: "user", content: origMsg });
+
+      appendBubble("assistant", reply);
+      history.push({ role: "assistant", content: reply });
+
+      if (data.export_intent) openExportPanel(detectExportFormat(origMsg));
+      showToast("✅ Retry succeeded", "success");
+
+    } catch (err) {
+      // Retry itself failed — restore the button so the user can try again
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove("retrying");
+        btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg> Retry`;
+      }
+      showToast("Retry failed: " + err.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   /* Shows a small badge in the export panel when a dataset is ready */
   function updateDatasetBadge() {
@@ -944,6 +1060,7 @@
   /* ======================================================================
      BUBBLE HELPERS
      ====================================================================== */
+  /* Normal assistant bubble — no retry button */
   function appendBubble(role, content) {
     const msgs = document.getElementById("messages");
     const now  = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -961,6 +1078,37 @@
     div.innerHTML = `<div class="msg-avatar">${initials}</div><div class="msg-body">${body}</div>`;
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  /* Error bubble — shows red styling + Retry button */
+  function appendErrorBubble(errorText, retryContext) {
+    const msgs = document.getElementById("messages");
+    const now  = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const id   = "err-" + Date.now();
+    const div  = document.createElement("div");
+    div.className = "msg assistant";
+    div.dataset.errorId = id;
+    // Store retry context on the element so retryError() can read it
+    div.dataset.retryMsg        = retryContext.message        || "";
+    div.dataset.retryHistoryLen = retryContext.historyLen     || 0;
+    div.innerHTML = `
+      <div class="msg-avatar"><img src="logo.png" alt="DIUD"></div>
+      <div class="msg-body">
+        <div class="msg-error-wrap">
+          <div class="msg-error-bubble">⚠️ ${escapeHtml(errorText)}</div>
+          <button class="msg-retry-btn" id="retrybtn-${id}" onclick="retryError('${id}')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            Retry
+          </button>
+        </div>
+        <div class="msg-time">${now}</div>
+      </div>`;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+    return id;
   }
 
   function escapeHtml(s) {
@@ -1220,8 +1368,7 @@
         <h2>Hey, I'm DIUD 👋</h2>
         <p>I'm your Data Intelligence Agent here to help you analyse live ClickHouse or Web data.<br>
            Ask me about pipeline deals, AE performance, win/loss analysis, BANT rates, regional breakdowns, and more.<br><br>
-           <em style="color:var(--txt-dim);font-size:12px;">💡 Tip: Ask "give me those 256 deals as CSV" or "export as PDF" to download the exact data.</em></p>
-      </div>`;
+           <em style="color:var(--txt-dim);font-size:12px;">
     updateDatasetBadge();
     if (panelOpen) closeExportPanel();
   }
