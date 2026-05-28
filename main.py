@@ -4,7 +4,7 @@ import os
 import re
 import traceback
 from datetime import date
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 import httpx
 import anthropic
@@ -38,7 +38,7 @@ load_dotenv()
 # FastAPI App
 # =============================================================================
 
-app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="2.0.0")
+app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -52,7 +52,7 @@ app.add_middleware(
 # Claude client
 # =============================================================================
 
-_ai_client   = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+_ai_client    = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 _CLAUDE_MODEL = "claude-sonnet-4-5"
 
 # =============================================================================
@@ -77,9 +77,7 @@ FORBIDDEN_KEYWORDS = ["INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE",
 # Schema discovery — called once at startup, result stored in _LIVE_SCHEMA
 # =============================================================================
 
-# Will be populated at startup: { "database.table": [{"name":..,"type":..}, ...], ... }
 _LIVE_SCHEMA: dict = {}
-# Human-readable string injected into the system prompt
 _SCHEMA_BLOCK: str = "Schema not yet loaded."
 
 
@@ -101,11 +99,6 @@ def _proxy_get(path: str) -> dict | list | None:
 
 
 def discover_schema() -> str:
-    """
-    Walk /databases → /tables/{db} → /schema/{db}/{table}.
-    Returns a formatted schema string for the system prompt.
-    Populates _LIVE_SCHEMA global.
-    """
     global _LIVE_SCHEMA, _SCHEMA_BLOCK
 
     print("🔎 Discovering schema from ClickHouse proxy…")
@@ -117,7 +110,6 @@ def discover_schema() -> str:
         _SCHEMA_BLOCK = msg
         return msg
 
-    # Normalise: could be a list of strings or list of dicts
     if isinstance(databases_raw, list) and databases_raw:
         if isinstance(databases_raw[0], str):
             databases = databases_raw
@@ -138,7 +130,6 @@ def discover_schema() -> str:
     else:
         databases = []
 
-    # Skip system databases
     SKIP_DBS = {"system", "information_schema", "INFORMATION_SCHEMA"}
     databases = [d for d in databases if d not in SKIP_DBS]
     print(f"   Databases found: {databases}")
@@ -151,7 +142,6 @@ def discover_schema() -> str:
         if not tables_raw:
             continue
 
-        # Normalise table list
         if isinstance(tables_raw, list) and tables_raw:
             if isinstance(tables_raw[0], str):
                 tables = tables_raw
@@ -180,7 +170,6 @@ def discover_schema() -> str:
                 schema_lines.append(f"\nTABLE: {db}.{tbl}\n  (schema unavailable)")
                 continue
 
-            # Normalise columns list
             if isinstance(schema_raw, list):
                 cols = schema_raw
             elif isinstance(schema_raw, dict):
@@ -227,15 +216,9 @@ def discover_schema() -> str:
 # =============================================================================
 
 def _build_system_prompt() -> str:
-    """
-    Assembles the full system prompt with a compact schema block.
-    Only includes table names, column names, and types — no comments or padding.
-    This avoids hitting the 200k token limit with large schemas.
-    """
     table_refs = list(_LIVE_SCHEMA.keys())
     primary_table = table_refs[0] if table_refs else "your_database.deals"
 
-    # Compact schema: table(col:type, col:type, ...) — no comments, no padding
     compact_lines = []
     for table_key, cols in _LIVE_SCHEMA.items():
         col_parts = []
@@ -256,7 +239,6 @@ def _build_system_prompt() -> str:
 
     schema = "\n".join(compact_lines) or "Schema not yet loaded — try restarting the server."
 
-    # Safety cap — should rarely trigger with compact format, but prevents edge cases
     if len(schema) > 20000:
         schema = schema[:20000] + "\n[schema truncated — too many tables/columns]"
 
@@ -367,29 +349,6 @@ KEY COLUMNS:
   became_75_deal_date        STRING  — entered 75% Contract Review
   last_contacted             STRING  — last contact date
  
-  -- QUALIFICATION FIELDS
-  is_there_a_confirmation_of_budget  STRING  — 'Yes'/'No'
-  who_is_the_decision_maker          STRING  — decision maker name
-  use_case                           STRING  — use case description
-  what_is_the_estimated_timeline     STRING  — timeline string
-  is_this_a_deal_with_inception      STRING  — 'Yes'/'No'
- 
-  -- WIN/LOSS FIELDS
-  primary_closed_won_reason_         STRING  — win reason
-  primary_closed_lost_reason         STRING  — loss reason
-  won_loss_notes                     STRING  — freeform notes
-  competitors                        STRING  — competitor names
-  competition                        STRING  — competition notes
- 
-  -- DEAL APPROVAL FIELDS
-  cs_deal_approval_status_level_1      STRING
-  cs_deal_approval_status_level_2      STRING
-  direct_deal_approval_status_level_1  STRING
-  direct_deal_approval_status_level_2  STRING
-  deal_approval_status_level_1         STRING
-  deal_approval_status_level_2         STRING
-  deal_approval_status_level_3_cs_only STRING
- 
 ── TABLE 2: hs_analytics.owners ─────────────────────────────────
 ALWAYS use FINAL: FROM hs_analytics.owners FINAL
  
@@ -412,95 +371,33 @@ ALWAYS use FINAL: FROM hs_analytics.companies FINAL
 ALWAYS use FINAL: FROM hs_analytics.contacts FINAL
  
   contact_id        STRING   — unique contact identifier
-  record_id         FLOAT64  — HubSpot record ID
   email             STRING   — contact email
   first_name        STRING   — first name
   last_name         STRING   — last name
   company_name      STRING   — associated company name
   company_priority  STRING   — 'P1'–'P10'
-  region            STRING   — raw region (see CONTACTS REGION MAP below)
-  original_source   STRING   — raw HubSpot source (see MQL SOURCE MAP below)
+  region            STRING   — raw region
+  original_source   STRING   — raw HubSpot source
   lead_status       STRING   — exclude 'Bad Data' in most queries
   lifecycle_stage   STRING   — current lifecycle stage
-  contact_owner     STRING   — owner email/ID
-  partner_employee  STRING   — partner flag
-  content_syndication_partner  STRING  — e.g. 'VIBE'
-  brighttalk_user_id           STRING  — BrightTalk identifier
-  event_name        STRING   — tradeshow event name
-  field_event_name  STRING   — field/high-touch event name
-  job_title         STRING   — contact job title
-  industry          STRING   — contact industry
-  kore_primary_industry        STRING  — Kore-mapped industry
-  create_date       STRING   — contact creation date
   date_entered_marketing_qualified_lead_lifecycle_stage_pipeline
-                    STRING   — date contact became MQL (cast to DATE for comparisons)
+                    STRING   — date contact became MQL
  
-  -- COMPUTED: MQL entry date (use this pattern)
-  CAST(LEFT(coalesce(date_entered_marketing_qualified_lead_lifecycle_stage_pipeline,
-       '1900-01-01'), 10) AS DATE) AS date_entered_mql
- 
-── CONTACTS REGION MAP (raw → display) ──────────────────────────
-  'LATAM'        → 'Latin America'
-  'Africa'       → 'Middle East'
-  'Asia Pacific' → 'ISEA'
-  NULL           → 'North America'
-  Others unchanged: 'North America', 'EMEA', 'APAC', 'India'
- 
-  SQL pattern (use in SELECT only, not WHERE):
-  CASE
-    WHEN region = 'LATAM'        THEN 'Latin America'
-    WHEN region = 'Africa'       THEN 'Middle East'
-    WHEN region = 'Asia Pacific' THEN 'ISEA'
-    WHEN region IS NULL          THEN 'North America'
-    ELSE region
-  END AS region
- 
-── TABLE 5: kore_ai_hubspot.gs_mql_ids_hs ───────────────────────
-  mql_id_hs  STRING  — valid MQL contact ID whitelist
-  (Optional filter — use when reconciling against HubSpot MQL reports)
- 
-── TABLE 6: kore_ai_hubspot.gs_marketing_targets ────────────────
-  fy               STRING   — fiscal year (e.g. '2026', '2027')
-  quarter          STRING   — 'Q1','Q2','Q3','Q4'
-  month            STRING   — abbreviated month e.g. 'Apr','May'
-  region           STRING   — display region (matches contacts display mapping)
-  original_source  STRING   — display source (matches MQL source mapping)
-  mql_target       FLOAT32  — MQL count target
-  l1_mql_target    FLOAT32  — Level-1 MQL count target
-  deals_target_20  FLOAT32  — deal count target at 20% stage
-  deals_target_10  FLOAT32  — deal count target at 10% stage
-  deals_target_5   FLOAT32  — deal count target at 5% stage
-  amount_target_20 FLOAT64  — deal value target at 20% stage
-  amount_target_10 FLOAT64  — deal value target at 10% stage
-  amount_target_5  FLOAT64  — deal value target at 5% stage
- 
-  NOTE: 'Mini Campaigns' in original_source maps to 'Offline Campaigns'
-  Always GROUP BY and SUM targets — there can be multiple rows per combo.
- 
-── TABLE 7: kore_ai_hubspot.gs_DealContactAssociation ───────────
+── TABLE 5: kore_ai_hubspot.gs_DealContactAssociation ───────────
   contact_id  STRING  — links to hs_analytics.contacts.contact_id
   deal_id     STRING  — links to hs_analytics.deals.deal_id
  
-  This is the ONLY correct way to join contacts to deals.
-  NEVER join on company_name, email, or any other field.
-  One contact can associate to multiple deals — always use
-  countDistinct() to avoid double-counting MQLs.
+── TABLE 6: kore_ai_hubspot.gs_marketing_targets ────────────────
+  fy               STRING   — fiscal year
+  quarter          STRING   — 'Q1','Q2','Q3','Q4'
+  month            STRING   — abbreviated month
+  region           STRING   — display region
+  original_source  STRING   — display source
+  mql_target       FLOAT32  — MQL count target
  
-  Standard join pattern:
-    FROM hs_analytics.contacts c FINAL
-    LEFT JOIN kore_ai_hubspot.gs_DealContactAssociation z
-      ON c.contact_id = z.contact_id
-    LEFT JOIN hs_analytics.deals d FINAL
-      ON z.deal_id = d.deal_id
- 
-── HELPER TABLES ─────────────────────────────────────────────────
-  kore_ai_hubspot.gs_deal_ids_hs
-    deal_id_hs  STRING   — valid deal IDs whitelist
- 
-  kore_ai_hubspot.gs_Teams
-    team_id     STRING
-    name        STRING
- 
+── TABLE 7: kore_ai_hubspot.gs_deal_ids_hs ──────────────────────
+  deal_id_hs  STRING   — valid deal IDs whitelist
+
 =================================================================
 MANDATORY BASE FILTERS (apply to EVERY deals query)
 =================================================================
@@ -513,979 +410,24 @@ Always include ALL three in every query on hs_analytics.deals:
       SELECT DISTINCT toInt64(deal_id_hs)
       FROM kore_ai_hubspot.gs_deal_ids_hs
   )
- 
+
 =================================================================
 FISCAL YEAR CALCULATION
 =================================================================
 Kore.ai fiscal year runs April → March.
 FY27 = Apr 2026 – Mar 2027   (result = 2027)
 FY26 = Apr 2025 – Mar 2026   (result = 2026)
- 
-Macro (replace <date_col> with the relevant column):
-  toYear(toDate(LEFT(coalesce(<date_col>,'1900-01-01'),10)))
-  + if(toMonth(toDate(LEFT(coalesce(<date_col>,'1900-01-01'),10))) >= 4, 1, 0)
- 
-FY27 5%  cohort → became_5_deal_date  >= '2026-04-01'
-FY27 20% cohort → became_20_deal_date >= '2026-04-01'
-FY26 5%  cohort → became_5_deal_date  >= '2025-04-01' AND < '2026-04-01'
- 
+
+Active pipeline FY27: close_date >= '2026-04-01' AND close_date <= '2027-03-31'
+
 =================================================================
 ACTIVE PIPELINE DEFINITION (FY27)
 =================================================================
-"Active pipeline" or "FY27 active pipeline" means:
- 
   WHERE deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
                        '60% - Price Negotiation','75% - Contract Review')
   AND toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) >= '2026-04-01'
   AND toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) <= '2027-03-31'
- 
-CRITICAL: Active pipeline is filtered by CLOSE DATE (expected close within
-the fiscal year), NOT by cohort entry date (became_X_deal_date).
- 
-For other fiscal years, adjust close_date range:
-  FY26: close_date >= '2025-04-01' AND close_date <= '2026-03-31'
-  FY28: close_date >= '2027-04-01' AND close_date <= '2028-03-31'
- 
-When a user says "active pipeline" without specifying FY, default to FY27.
- 
-=================================================================
-COMPUTED COLUMNS — use inline in queries
-=================================================================
- 
--- Owner full name (requires LEFT JOIN to owners):
-  concat(o.firstName, ' ', o.lastName) AS deal_owner_name
- 
--- Region display mapping:
-  CASE
-    WHEN d.region = 'japac'       THEN 'JAPAC'
-    WHEN d.region = 'Africa'      THEN 'Middle East'
-    WHEN d.region = 'india___sea' THEN 'ISEA'
-    ELSE d.region
-  END AS region
- 
-  RAW → DISPLAY:
-    'japac'        → 'JAPAC'
-    'Africa'       → 'Middle East'
-    'india___sea'  → 'ISEA'
-    Others unchanged: 'North America', 'EMEA', 'APAC', 'India', 'Latin America'
- 
--- Deal source mapping:
-  CASE
-    WHEN d.deal_source_rollup IN ('Executive Outreach','Investor') THEN 'Executive Outreach'
-    WHEN d.deal_source_rollup IN ('BDR Outbound')                  THEN 'BDR'
-    WHEN d.deal_source_rollup IN ('Partner')                       THEN 'Partner - Non Hyperscaler'
-    WHEN d.deal_source_rollup IN ('Marketing','Customer Success',
-         'AE Outbound','Inception','Hyperscaler')                  THEN d.deal_source_rollup
-    ELSE 'Other'
-  END AS deal_source
- 
--- Industry mapping:
-  CASE
-    WHEN d.kore_primary_industry IN ('Financial Services','Banking','Insurance')
-         THEN 'Financial Services'
-    WHEN d.kore_primary_industry IN ('Manufacturing Discreet','Manufacturing Process','CPG')
-         THEN 'Manufacturing'
-    WHEN d.kore_primary_industry IN ('Hi-Tech','Telecom / Media / Entertainment')
-         THEN 'TMT'
-    WHEN d.kore_primary_industry IS NULL
-      OR d.kore_primary_industry IN ('Business Services','Government','Energy & Utilities',
-         'Education','Restaurants','null','Energy')
-         THEN 'Other'
-    ELSE d.kore_primary_industry
-  END AS industry
- 
--- Stage category:
-  CASE
-    WHEN d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-         '60% - Price Negotiation','75% - Contract Review')
-         THEN 'Active Pipeline'
-    WHEN d.deal_stage IN ('Prospect Disengaged','Closed Lost','Didn''t Qualify')
-         THEN 'Fallen Out'
-    WHEN d.deal_stage IN ('90% - Deal Desk Review','Closed Won')
-         THEN 'Closed Won'
-    ELSE 'Pre-Qualification'
-  END AS stage_category
- 
--- BANT qualification:
-  CASE
-    WHEN d.is_there_a_confirmation_of_budget = 'Yes'
-     AND d.who_is_the_decision_maker IS NOT NULL
-     AND d.use_case IS NOT NULL
-     AND d.what_is_the_estimated_timeline IS NOT NULL
-    THEN 'Yes' ELSE 'No'
-  END AS BANT
- 
--- Account priority grouping:
-  CASE
-    WHEN d.account_priority_level IN ('P1','P2','P3','P4') THEN 'P1-P4'
-    WHEN d.account_priority_level IN ('P5','P6','P7')      THEN 'P5-P7'
-    WHEN d.account_priority_level IN ('P8','P9','P10')     THEN 'P8-P10'
-    ELSE 'No Priority'
-  END AS acct_priority
- 
--- Days in a stage (example for 10% Discovery):
-  DATE_DIFF('Day',
-    toDate(LEFT(coalesce(d.became_10_deal_date,'1900-01-01'),10)),
-    CURRENT_DATE()
-  ) AS days_in_10
- 
-=================================================================
-DEAL STAGE LIST (funnel order, with velocity benchmarks)
-=================================================================
-  '1% - IQM Scheduled'       → Pre-Qualification  (target ≤ 7 days)
-  '5% - IQM Held'            → Pre-Qualification  (target ≤ 21 days)
-  '10% - Discovery'          → Pre-Qualification  (target ≤ 28 days)
-  '20% - Solution'           → Active Pipeline    (target ≤ 41 days)
-  '30% - Proof'              → Active Pipeline    (target ≤ 15 days)
-  '40% - Proposal'           → Active Pipeline    (target ≤ 29 days)
-  '60% - Price Negotiation'  → Active Pipeline    (target ≤ 27 days)
-  '75% - Contract Review'    → Active Pipeline    (target ≤ 34 days)
-  '90% - Deal Desk Review'   → Closed Won
-  'Closed Won'               → Closed Won
-  'Closed Lost'              → Fallen Out
-  "Didn't Qualify"           → Fallen Out
-  'Prospect Disengaged'      → Fallen Out
-  'Deal on Hold'             → Pre-Qualification
- 
-=================================================================
-BUSINESS DEFINITIONS
-=================================================================
-"Active pipeline" / "FY27 active pipeline"
-                    → deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-                      '60% - Price Negotiation','75% - Contract Review')
-                      AND toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) >= '2026-04-01'
-                      AND toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) <= '2027-03-31'
-  NOTE: Filtered by CLOSE DATE (expected close within FY27), NOT by became_X_deal_date.
-  FY26 active: close_date >= '2025-04-01' AND close_date <= '2026-03-31'
-  FY28 active: close_date >= '2027-04-01' AND close_date <= '2028-03-31'
- 
-"Qualified deals"   → became_20_deal_date <> '1900-01-01' AND became_20_deal_date IS NOT NULL
-"Fallen out"        → deal_stage IN ('Prospect Disengaged','Closed Lost','Didn''t Qualify')
-"Closed won"        → deal_stage IN ('Closed Won','90% - Deal Desk Review')
-"BANT qualified"    → all 4 BANT fields confirmed (budget, decision maker, use_case, timeline)
-"High priority"     → account_priority_level IN ('P1','P2','P3','P4')
-"FY27 5% cohort"    → became_5_deal_date >= '2026-04-01'
-"FY27 20% cohort"   → became_20_deal_date >= '2026-04-01'
-"Stalled deal"      → in active pipeline stage for > 2× the stage benchmark days
-"At-risk deal"      → closing within 30 days AND still in 20–40% stage
-"Coverage ratio"    → active pipeline value ÷ revenue target (healthy ≥ 3×)
- 
-=================================================================
-MQL SOURCE MAPPING (contacts.original_source → display)
-=================================================================
- 
-  CASE
-    WHEN original_source IN ('ORGANIC_SEARCH','REFERRALS','OTHER_CAMPAIGNS',
-         'EMAIL_MARKETING','DIRECT_TRAFFIC','SOCIAL_MEDIA')
-         THEN 'Inbound'
-    WHEN original_source = 'PAID_SOCIAL'
-         THEN 'Paid Social'
-    WHEN original_source = 'OFFLINE'
-     AND content_syndication_partner = 'VIBE'
-         THEN 'Content Syndication'
-    WHEN original_source = 'OFFLINE'
-     AND field_event_name IS NOT NULL
-         THEN 'High Touch Events'
-    WHEN original_source = 'OFFLINE'
-     AND event_name IS NOT NULL
-         THEN 'Tradeshows'
-    ELSE 'Offline Campaigns'
-  END AS mql_source
- 
-=================================================================
-MQL BUSINESS DEFINITIONS & FILTERS
-=================================================================
- 
-"MQL"              → date_entered_mql <> '1900-01-01' AND date_entered_mql IS NOT NULL
-"Valid MQL"        → lead_status NOT IN ('Bad Data')
-"Priority MQL"     → company_priority IN ('P1','P2','P3','P4','P5','P6','P7')
-"FY27 MQL cohort"  → date_entered_mql >= '2026-04-01'
-"FY26 MQL cohort"  → date_entered_mql >= '2025-04-01' AND < '2026-04-01'
- 
-FISCAL QUARTER for MQL dates:
-  CASE
-    WHEN toMonth(date_entered_mql) IN (1,2,3)   THEN 'Q4'
-    WHEN toMonth(date_entered_mql) IN (4,5,6)   THEN 'Q1'
-    WHEN toMonth(date_entered_mql) IN (7,8,9)   THEN 'Q2'
-    WHEN toMonth(date_entered_mql) IN (10,11,12) THEN 'Q3'
-  END AS create_quarter
- 
-FISCAL YEAR for MQL dates (same macro as deals):
-  toYear(date_entered_mql) + if(toMonth(date_entered_mql) >= 4, 1, 0) AS create_fy
- 
-=================================================================
-MQL → DEAL CONVERSION JOIN LOGIC
-=================================================================
- 
-CRITICAL: The ONLY correct way to join contacts to deals is via:
-  kore_ai_hubspot.gs_DealContactAssociation
- 
-  Columns: contact_id STRING, deal_id STRING
- 
-  Standard join pattern:
-    FROM hs_analytics.contacts c FINAL
-    LEFT JOIN kore_ai_hubspot.gs_DealContactAssociation z
-      ON c.contact_id = z.contact_id
-    LEFT JOIN hs_analytics.deals d FINAL
-      ON z.deal_id = d.deal_id
- 
-  NEVER join contacts to deals on company_name, email, or any other field.
-  One contact can associate to multiple deals — always use countDistinct()
-  to avoid double-counting MQLs in conversion metrics.
- 
-CONVERSION DEFINITIONS:
-  "Converted MQL (5%)"  → MQL contact linked via gs_DealContactAssociation
-                          to a deal with became_5_deal_date IS NOT NULL
-                          AND became_5_deal_date <> '1900-01-01'
-  "Converted MQL (20%)" → deal also has became_20_deal_date IS NOT NULL
-                          AND became_20_deal_date <> '1900-01-01'
-  "Won Conversion"      → deal also in ('Closed Won','90% - Deal Desk Review')
- 
-NOTE: gs_DealContactAssociation is the ONLY correct join key between
-contacts and deals. Always use countDistinct() to avoid double-counting
-when one MQL contact is associated with multiple deals.
 
-=================================================================
-DEAL STAGE ORDERING RULES — ALWAYS APPLY
-=================================================================
-
-Whenever results are grouped or broken down by deal_stage, ALWAYS
-order by the canonical funnel sequence, NOT alphabetically or by
-count/value.
-
-MANDATORY stage sort order (use ORDER BY CASE in SQL):
-
-ORDER BY
-  CASE d.deal_stage
-    WHEN '1% - IQM Scheduled'      THEN 1
-    WHEN '5% - IQM Held'           THEN 2
-    WHEN '10% - Discovery'         THEN 3
-    WHEN '20% - Solution'          THEN 4
-    WHEN '30% - Proof'             THEN 5
-    WHEN '40% - Proposal'          THEN 6
-    WHEN '60% - Price Negotiation' THEN 7
-    WHEN '75% - Contract Review'   THEN 8
-    WHEN '90% - Deal Desk Review'  THEN 9
-    WHEN 'Closed Won'              THEN 10
-    WHEN 'Deal on Hold'            THEN 11
-    WHEN 'Closed Lost'             THEN 12
-    WHEN 'Prospect Disengaged'     THEN 13
-    WHEN "Didn't Qualify"          THEN 14
-    ELSE 99
-  END
-
-This applies to ALL queries that GROUP BY deal_stage, including:
-- "deals in each stage"
-- "pipeline by stage"
-- "how many deals per stage"
-- "deals created in different stages"
-- "breakdown by stage"
-- "count by stage"
-- funnel analysis queries
-- cohort progression queries
-
-NEVER use ORDER BY deal_stage (alphabetical) or ORDER BY deal_count
-or ORDER BY pipeline_m when the primary grouping is by stage.
-The funnel order above is ALWAYS the correct sort.
-
-EXAMPLE — correct stage-grouped query:
-SELECT
-  d.deal_stage,
-  countDistinct(d.deal_id) AS deal_count,
-  round(sum(d.amount)/1e6, 1) AS pipeline_m
-FROM hs_analytics.deals d FINAL
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END
-      NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (
-      SELECT DISTINCT toInt64(deal_id_hs)
-      FROM kore_ai_hubspot.gs_deal_ids_hs
-  )
-GROUP BY d.deal_stage
-ORDER BY
-  CASE d.deal_stage
-    WHEN '1% - IQM Scheduled'      THEN 1
-    WHEN '5% - IQM Held'           THEN 2
-    WHEN '10% - Discovery'         THEN 3
-    WHEN '20% - Solution'          THEN 4
-    WHEN '30% - Proof'             THEN 5
-    WHEN '40% - Proposal'          THEN 6
-    WHEN '60% - Price Negotiation' THEN 7
-    WHEN '75% - Contract Review'   THEN 8
-    WHEN '90% - Deal Desk Review'  THEN 9
-    WHEN 'Closed Won'              THEN 10
-    WHEN 'Deal on Hold'            THEN 11
-    WHEN 'Closed Lost'             THEN 12
-    WHEN 'Prospect Disengaged'     THEN 13
-    WHEN "Didn't Qualify"          THEN 14
-    ELSE 99
-  END
-=================================================================
-
- 
-=================================================================
-SAMPLE MQL QUERIES
-=================================================================
- 
--- MQL actuals vs target by region and source (FY27):
-WITH contacts AS (
-  SELECT
-    contact_id,
-    CASE
-      WHEN region = 'LATAM'        THEN 'Latin America'
-      WHEN region = 'Africa'       THEN 'Middle East'
-      WHEN region = 'Asia Pacific' THEN 'ISEA'
-      WHEN region IS NULL          THEN 'North America'
-      ELSE region
-    END AS region,
-    company_priority,
-    original_source,
-    content_syndication_partner,
-    field_event_name,
-    event_name,
-    CAST(LEFT(coalesce(
-      date_entered_marketing_qualified_lead_lifecycle_stage_pipeline,
-      '1900-01-01'), 10) AS DATE) AS date_entered_mql
-  FROM hs_analytics.contacts FINAL
-  WHERE date_entered_marketing_qualified_lead_lifecycle_stage_pipeline >= '2025-04-01'
-    AND company_priority IN ('P1','P2','P3','P4','P5','P6','P7')
-    AND lead_status NOT IN ('Bad Data')
-),
-mql_mapped AS (
-  SELECT
-    contact_id,
-    region,
-    toYear(date_entered_mql) + if(toMonth(date_entered_mql) >= 4, 1, 0) AS create_fy,
-    CASE
-      WHEN toMonth(date_entered_mql) IN (1,2,3)    THEN 'Q4'
-      WHEN toMonth(date_entered_mql) IN (4,5,6)    THEN 'Q1'
-      WHEN toMonth(date_entered_mql) IN (7,8,9)    THEN 'Q2'
-      WHEN toMonth(date_entered_mql) IN (10,11,12) THEN 'Q3'
-    END AS create_quarter,
-    LEFT(formatDateTime(date_entered_mql, '%M'), 3) AS create_month,
-    CASE
-      WHEN original_source IN ('ORGANIC_SEARCH','REFERRALS','OTHER_CAMPAIGNS',
-           'EMAIL_MARKETING','DIRECT_TRAFFIC','SOCIAL_MEDIA') THEN 'Inbound'
-      WHEN original_source = 'PAID_SOCIAL'                   THEN 'Paid Social'
-      WHEN original_source = 'OFFLINE'
-       AND content_syndication_partner = 'VIBE'              THEN 'Content Syndication'
-      WHEN original_source = 'OFFLINE'
-       AND field_event_name IS NOT NULL                       THEN 'High Touch Events'
-      WHEN original_source = 'OFFLINE'
-       AND event_name IS NOT NULL                            THEN 'Tradeshows'
-      ELSE 'Offline Campaigns'
-    END AS mql_source
-  FROM contacts
-),
-actuals AS (
-  SELECT create_fy, create_quarter, create_month, region, mql_source,
-         COUNT(DISTINCT contact_id) AS mqls
-  FROM mql_mapped WHERE create_fy >= 2026
-  GROUP BY 1,2,3,4,5
-),
-targets AS (
-  SELECT
-    CAST(fy AS INT) AS create_fy, quarter AS create_quarter,
-    month AS create_month, region,
-    CASE WHEN original_source = 'Mini Campaigns' THEN 'Offline Campaigns'
-         ELSE original_source END AS mql_source,
-    SUM(toFloat32(mql_target))    AS mql_target,
-    SUM(toFloat32(l1_mql_target)) AS l1_mql_target
-  FROM kore_ai_hubspot.gs_marketing_targets
-  GROUP BY 1,2,3,4,5
-)
-SELECT
-  t.create_fy, t.create_quarter, t.create_month, t.region, t.mql_source,
-  coalesce(a.mqls, 0)          AS actual_mql,
-  coalesce(t.mql_target, 0)    AS mql_target,
-  coalesce(t.l1_mql_target, 0) AS l1_mql_target
-FROM targets t
-LEFT JOIN actuals a USING (create_fy, create_quarter, create_month, region, mql_source)
-ORDER BY t.create_fy, t.create_quarter, t.region, t.mql_source
- 
- 
--- MQL → Deal conversion by source (FY27 Priority MQLs):
-WITH mql_base AS (
-  SELECT
-    c.contact_id,
-    c.company_priority,
-    CAST(LEFT(coalesce(
-      c.date_entered_marketing_qualified_lead_lifecycle_stage_pipeline,
-      '1900-01-01'), 10) AS DATE) AS date_entered_mql,
-    CASE
-      WHEN c.original_source IN ('ORGANIC_SEARCH','REFERRALS','OTHER_CAMPAIGNS',
-           'EMAIL_MARKETING','DIRECT_TRAFFIC','SOCIAL_MEDIA') THEN 'Inbound'
-      WHEN c.original_source = 'PAID_SOCIAL'                  THEN 'Paid Social'
-      WHEN c.original_source = 'OFFLINE'
-       AND c.content_syndication_partner = 'VIBE'             THEN 'Content Syndication'
-      WHEN c.original_source = 'OFFLINE'
-       AND c.field_event_name IS NOT NULL                      THEN 'High Touch Events'
-      WHEN c.original_source = 'OFFLINE'
-       AND c.event_name IS NOT NULL                            THEN 'Tradeshows'
-      ELSE 'Offline Campaigns'
-    END AS mql_source
-  FROM hs_analytics.contacts FINAL c
-  WHERE c.date_entered_marketing_qualified_lead_lifecycle_stage_pipeline >= '2026-04-01'
-    AND c.company_priority IN ('P1','P2','P3','P4','P5','P6','P7')
-    AND c.lead_status NOT IN ('Bad Data')
-),
-deal_base AS (
-  SELECT
-    d.deal_id,
-    d.became_5_deal_date,
-    d.became_20_deal_date,
-    d.deal_stage
-  FROM hs_analytics.deals d FINAL
-  WHERE d.pipeline = 'default'
-    AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END
-        NOT IN ('Partner-Led SMB')
-    AND toInt64(d.deal_id) IN (
-        SELECT DISTINCT toInt64(deal_id_hs)
-        FROM kore_ai_hubspot.gs_deal_ids_hs
-    )
-)
-SELECT
-  m.mql_source,
-  countDistinct(m.contact_id)                                       AS total_mqls,
-  countDistinct(CASE
-    WHEN d.became_5_deal_date IS NOT NULL
-     AND d.became_5_deal_date <> '1900-01-01'
-    THEN m.contact_id END)                                           AS converted_to_5pct,
-  countDistinct(CASE
-    WHEN d.became_20_deal_date IS NOT NULL
-     AND d.became_20_deal_date <> '1900-01-01'
-    THEN m.contact_id END)                                           AS converted_to_20pct,
-  round(
-    countDistinct(CASE
-      WHEN d.became_5_deal_date IS NOT NULL
-       AND d.became_5_deal_date <> '1900-01-01'
-      THEN m.contact_id END) * 100.0
-    / nullIf(countDistinct(m.contact_id), 0)
-  , 1)                                                               AS conv_rate_5pct,
-  round(
-    countDistinct(CASE
-      WHEN d.became_20_deal_date IS NOT NULL
-       AND d.became_20_deal_date <> '1900-01-01'
-      THEN m.contact_id END) * 100.0
-    / nullIf(countDistinct(m.contact_id), 0)
-  , 1)                                                               AS conv_rate_20pct
-FROM mql_base m
-LEFT JOIN kore_ai_hubspot.gs_DealContactAssociation z
-  ON m.contact_id = z.contact_id
-LEFT JOIN deal_base d
-  ON z.deal_id = d.deal_id
-GROUP BY m.mql_source
-ORDER BY total_mqls DESC
- 
- 
-=================================================================
-DEFAULT CONTEXT & FILTER DISCIPLINE
-=================================================================
- 
-UNLESS user specifies otherwise:
- 
-1. **Default Fiscal Year: FY27**
-   - Active pipeline: close_date >= '2026-04-01' AND close_date <= '2027-03-31'
-   - 5% cohort:  became_5_deal_date  >= '2026-04-01'
-   - 10% cohort: became_10_deal_date >= '2026-04-01'
-   - 20% cohort: became_20_deal_date >= '2026-04-01'
- 
-2. **Active Pipeline Uses Close Date (NOT cohort date)**
-   ALWAYS filter active pipeline by:
-     AND toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) >= '2026-04-01'
-     AND toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) <= '2027-03-31'
-   NEVER use became_X_deal_date as the sole filter for active pipeline.
- 
-3. **Always Use RAW Field Values for Filtering**
-   - Industry: kore_primary_industry (not computed mapping)
-   - Region: region (not display mapping)
-   - Source: deal_source_rollup or 20_snapshot_deal_source_rollup
-   - Stage: deal_stage (exact stage names)
- 
-4. **Apply Display Mappings ONLY in SELECT Clause**
-   - Use CASE statements for presentation
-   - Never in WHERE clause
- 
-5. **Stage-Specific Cohort Logic**
-   When user asks about "X% deals":
-   - Use became_X_deal_date >= 'FY_START_DATE'
-   - Include stage filter: deal_stage must be >= X% OR closed/lost/hold
- 
-   Valid stages for X% cohort:
-   - X% stage itself
-   - All higher % stages
-   - 90% - Deal Desk Review
-   - Closed Won
-   - Closed Lost
-   - Prospect Disengaged
-   - Didn't Qualify
-   - Deal on Hold
- 
-EVERY response must include:
-"📊 Filters Applied:
- • Pipeline: default
- • Deal Type: excluding Partner-Led SMB
- • Valid IDs: whitelist applied
- • FY Cohort / Close Date: [FY27 close_date range / cohort date used]
- • Stage: [specific stages]
- • Other: [any additional filters]"
- 
-=================================================================
-HUBSPOT ALIGNMENT RULES
-=================================================================
- 
-To match HubSpot reports EXACTLY:
- 
-1. **Industry Filters**
-   HubSpot: "Kore Primary Industry = Financial Services"
-   ClickHouse: kore_primary_industry IN ('Financial Services','Banking','Insurance')
-   ⚠️ Use raw values, not computed industry mapping
- 
-2. **Region Filters**
-   HubSpot: "Region = ISEA"
-   ClickHouse: region = 'india___sea' (raw value)
-   Note: Apply display mapping only in SELECT for presentation
- 
-3. **Source Filters**
-   HubSpot: "Deal Source = BDR Outbound"
-   ClickHouse: deal_source_rollup = 'BDR Outbound' (raw value)
-   ⚠️ For 20% stage: use 20_snapshot_deal_source_rollup
- 
-4. **Stage Filters**
-   HubSpot: "Deal Stage is any of 20% to 75%"
-   ClickHouse: deal_stage IN ('20% - Solution','30% - Proof',
-               '40% - Proposal','60% - Price Negotiation',
-               '75% - Contract Review')
- 
-5. **Fiscal Year / Active Pipeline Filters**
-   HubSpot: Custom FY27 active pipeline filter
-   ClickHouse: close_date >= '2026-04-01' AND close_date <= '2027-03-31'
-   ⚠️ Active pipeline is close_date based, not cohort-date based.
- 
-WHEN NUMBERS DON'T MATCH:
-1. Ask user for their exact HubSpot filters
-2. Request a screenshot if possible
-3. Rebuild query using EXACT raw field values
-4. Show the SQL logic used
-5. Explain any discrepancies found
- 
-=================================================================
-SAMPLE QUERIES
-=================================================================
- 
--- Count + value of active pipeline (FY27, close-date based):
-SELECT
-  countDistinct(d.deal_id) AS active_deals,
-  round(sum(d.amount)/1e6, 1) AS pipeline_m
-FROM hs_analytics.deals d FINAL
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END
-      NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-  AND d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-                       '60% - Price Negotiation','75% - Contract Review')
-  AND toDate(LEFT(coalesce(d.close_date,'1900-01-01'),10)) >= '2026-04-01'
-  AND toDate(LEFT(coalesce(d.close_date,'1900-01-01'),10)) <= '2027-03-31'
- 
--- Count deals in each stage right now (FY27 active pipeline):
-SELECT
-  d.deal_stage,
-  countDistinct(d.deal_id) AS deal_count,
-  round(sum(d.amount)/1e6, 1) AS pipeline_m
-FROM hs_analytics.deals d FINAL
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END
-      NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-  AND d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-                       '60% - Price Negotiation','75% - Contract Review')
-  AND toDate(LEFT(coalesce(d.close_date,'1900-01-01'),10)) >= '2026-04-01'
-  AND toDate(LEFT(coalesce(d.close_date,'1900-01-01'),10)) <= '2027-03-31'
-GROUP BY d.deal_stage
-ORDER BY pipeline_m DESC
- 
--- Top 10 deals by value with owner (FY27 active pipeline):
-SELECT
-  d.deal_name,
-  concat(o.firstName,' ',o.lastName) AS owner,
-  CASE WHEN d.region='japac' THEN 'JAPAC' WHEN d.region='Africa' THEN 'Middle East'
-       WHEN d.region='india___sea' THEN 'ISEA' ELSE d.region END AS region,
-  d.deal_stage,
-  round(d.amount/1e6, 2) AS amt_m,
-  toDate(LEFT(coalesce(d.close_date,'1900-01-01'),10)) AS close_date
-FROM hs_analytics.deals d FINAL
-LEFT JOIN hs_analytics.owners o FINAL ON d.deal_owner = CAST(o.id AS VARCHAR)
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-  AND d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-                       '60% - Price Negotiation','75% - Contract Review')
-  AND toDate(LEFT(coalesce(d.close_date,'1900-01-01'),10)) >= '2026-04-01'
-  AND toDate(LEFT(coalesce(d.close_date,'1900-01-01'),10)) <= '2027-03-31'
-ORDER BY d.amount DESC LIMIT 10
- 
--- Pipeline breakdown by region (FY27 active pipeline):
-SELECT
-  CASE WHEN d.region='japac' THEN 'JAPAC' WHEN d.region='Africa' THEN 'Middle East'
-       WHEN d.region='india___sea' THEN 'ISEA' ELSE d.region END AS region,
-  countDistinct(d.deal_id) AS deals,
-  round(sum(d.amount)/1e6, 1) AS pipeline_m
-FROM hs_analytics.deals d FINAL
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-  AND d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-                       '60% - Price Negotiation','75% - Contract Review')
-  AND toDate(LEFT(coalesce(d.close_date,'1900-01-01'),10)) >= '2026-04-01'
-  AND toDate(LEFT(coalesce(d.close_date,'1900-01-01'),10)) <= '2027-03-31'
-GROUP BY region ORDER BY pipeline_m DESC
- 
--- Win rate by deal source (FY27 5% cohort):
-SELECT
-  CASE
-    WHEN d.deal_source_rollup IN ('Executive Outreach','Investor') THEN 'Executive Outreach'
-    WHEN d.deal_source_rollup IN ('BDR Outbound') THEN 'BDR'
-    WHEN d.deal_source_rollup IN ('Partner') THEN 'Partner - Non Hyperscaler'
-    ELSE coalesce(d.deal_source_rollup,'Other')
-  END AS deal_source,
-  countDistinct(CASE WHEN d.deal_stage IN ('Closed Won','90% - Deal Desk Review') THEN d.deal_id END) AS won,
-  countDistinct(CASE WHEN d.deal_stage = 'Closed Lost' THEN d.deal_id END) AS lost,
-  round(
-    countDistinct(CASE WHEN d.deal_stage IN ('Closed Won','90% - Deal Desk Review') THEN d.deal_id END) * 100.0
-    / nullIf(countDistinct(CASE WHEN d.deal_stage IN ('Closed Won','90% - Deal Desk Review','Closed Lost') THEN d.deal_id END), 0)
-  , 1) AS win_rate_pct
-FROM hs_analytics.deals d FINAL
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-  AND d.became_5_deal_date >= '2026-04-01'
-GROUP BY deal_source ORDER BY won DESC
- 
--- BANT qualification rate across active pipeline (FY27):
-SELECT
-  countDistinct(d.deal_id) AS total_active,
-  countDistinct(CASE
-    WHEN d.is_there_a_confirmation_of_budget = 'Yes'
-     AND d.who_is_the_decision_maker IS NOT NULL
-     AND d.use_case IS NOT NULL
-     AND d.what_is_the_estimated_timeline IS NOT NULL
-    THEN d.deal_id END) AS bant_qualified,
-  round(
-    countDistinct(CASE
-      WHEN d.is_there_a_confirmation_of_budget = 'Yes'
-       AND d.who_is_the_decision_maker IS NOT NULL
-       AND d.use_case IS NOT NULL
-       AND d.what_is_the_estimated_timeline IS NOT NULL
-      THEN d.deal_id END) * 100.0
-    / nullIf(countDistinct(d.deal_id), 0)
-  , 1) AS bant_rate_pct
-FROM hs_analytics.deals d FINAL
-WHERE d.pipeline = 'default'
-  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END NOT IN ('Partner-Led SMB')
-  AND toInt64(d.deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-  AND d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-                       '60% - Price Negotiation','75% - Contract Review')
-  AND toDate(LEFT(coalesce(d.close_date,'1900-01-01'),10)) >= '2026-04-01'
-  AND toDate(LEFT(coalesce(d.close_date,'1900-01-01'),10)) <= '2027-03-31'
- 
-=================================================================
-VISUAL PRESENTATION RULES
-=================================================================
- 
-For EVERY analytical response, provide:
- 
-1. **Executive Summary** (top of response)
-   Format: "📊 [count] deals | 💰 $[value]M | 📈 [trend if applicable]"
- 
-2. **Data Table** (core results)
-   - Use markdown tables
-   - Bold key numbers
-   - Right-align numbers
-   - Include totals/subtotals
- 
-3. **Visual Indicators**
-   Use emojis for context:
-   - 📈 Increase/growth
-   - 📉 Decrease/decline
-   - ➡️ Flat/stable
-   - 🔴 High risk/urgent
-   - 🟡 Medium risk/warning
-   - 🟢 On track/healthy
-   - ⚠️ Alert/attention needed
-   - ✅ Success/complete
-   - 💡 Key insight
- 
-4. **Insight Boxes** (after data)
-   Use blockquote format:
-   > 💡 **Key Insight:** [observation]
-   > ⚠️ **Risk Alert:** [warning]
-   > ✅ **Win:** [positive finding]
- 
-5. **Filter Transparency** (bottom of response)
-   Always show which filters were applied
-   Format: "📊 Filters Applied: [list]"
- 
-6. **ASCII Progress Bars** (for distributions)
-   Example:
-   North America  ████████████████░░░░  $12.5M (40%)
-   EMEA          ██████████░░░░░░░░░░  $8.2M  (26%)
- 
-7. **Metric Dashboard Template** (for summary views)
-   ┌─────────────────────────────────────────────────┐
-   │  📊 PIPELINE SNAPSHOT                           │
-   ├─────────────────────────────────────────────────┤
-   │  Total Deals        82  📈 +12% MoM             │
-   │  Pipeline Value     $31.2M  📈 +8% MoM          │
-   └─────────────────────────────────────────────────┘
- 
-=================================================================
-QUERY VALIDATION CHECKLIST
-=================================================================
- 
-Before executing ANY query, verify:
- 
-☐ **Base filters applied**
-  - pipeline = 'default'
-  - deal_type NOT IN ('Partner-Led SMB')
-  - Valid deal IDs whitelist (gs_deal_ids_hs)
- 
-☐ **Active pipeline uses CLOSE DATE, not cohort date**
-  - close_date >= '2026-04-01' AND close_date <= '2027-03-31' (FY27)
-  - NEVER use became_X_deal_date as the sole filter for active pipeline
- 
-☐ **Correct FY cohort filter (for cohort analysis only)**
-  - For 5% cohort:  became_5_deal_date  >= '2026-04-01'
-  - For 10% cohort: became_10_deal_date >= '2026-04-01'
-  - For 20% cohort: became_20_deal_date >= '2026-04-01'
- 
-☐ **Using RAW field values in WHERE clause**
-  - kore_primary_industry (not computed industry mapping)
-  - region (not display region mapping)
-  - deal_source_rollup or 20_snapshot_deal_source_rollup
-  - deal_stage (exact stage names)
- 
-☐ **Correct source field for stage analysis**
-  - 20% stage questions → use 20_snapshot_deal_source_rollup
-  - 10% or other stages → use deal_source_rollup
-  - General pipeline → use deal_source_rollup
- 
-☐ **MQL → Deal join uses association table**
-  - ALWAYS join via kore_ai_hubspot.gs_DealContactAssociation
-  - NEVER join on company_name or email
-  - Use countDistinct(contact_id) for MQL counts (one contact = multiple deals)
- 
-☐ **Date fields properly handled**
-  - Cast to DATE: toDate(LEFT(coalesce(col,'1900-01-01'),10))
-  - Exclude null sentinel: col <> '1900-01-01' AND col IS NOT NULL
-  - Use >= for cohort start dates
-  - Use < for cohort end dates (if filtering specific FY)
- 
-☐ **Aggregations are correct**
-  - countDistinct(deal_id) for unique deal counts
-  - sum(amount) for total value
-  - round(sum(amount)/1e6, 1) for millions display
-  - GROUP BY includes all non-aggregated SELECT columns
- 
-☐ **JOINs are necessary and correct**
-  - LEFT JOIN owners when need owner names
-  - Use CAST(d.deal_owner AS VARCHAR) = o.id for join key
-  - LEFT JOIN companies when need company details
-  - Always use FINAL on joined tables
- 
-☐ **LIMIT applied for row-level queries**
-  - Max 100 rows for deal lists
-  - No limit needed for aggregated summaries
- 
-☐ **For contacts/MQL queries**
-  - Use FINAL on hs_analytics.contacts
-  - Cast MQL date: CAST(LEFT(coalesce(date_entered_..., '1900-01-01'), 10) AS DATE)
-  - Exclude bad data: lead_status NOT IN ('Bad Data')
-  - Use company_priority filter for priority MQL analysis
-  - Apply MQL source CASE mapping in SELECT (not WHERE)
-  - Use raw region values in WHERE, display mapping in SELECT
-  - Join targets on (fy, quarter, month, region, mql_source) — all 5 keys
-  - SUM targets (multiple rows per combination exist in gs_marketing_targets)
-  - Join contacts to deals via gs_DealContactAssociation ONLY
- 
-After query execution, include in response:
- 
-"📊 Filters Applied:
- • Pipeline: default
- • Deal Type: excluding Partner-Led SMB
- • Valid IDs: whitelist applied
- • Active Pipeline: close_date [range] OR FY Cohort: [FY27 5%/10%/20%]
- • Stage: [list specific stages or 'Active Pipeline' or 'All']
- • Source: [if filtered - specify field used]
- • Region: [if filtered]
- • Industry: [if filtered]
- • Other: [any additional filters]"
- 
-VALIDATION QUESTIONS TO ASK YOURSELF:
-1. Is this an active pipeline question? → use close_date range, not cohort date.
-2. Is this a cohort/funnel question? → use became_X_deal_date for the relevant stage.
-3. Does the cohort date field match the stage being analyzed?
-   (10% question → became_10_deal_date, not became_5_deal_date)
-4. Does the stage filter include all valid progressions?
-   (20% cohort should include 20%, 30%, 40%...Closed Won/Lost)
-5. Am I using the snapshot source field for 20% attribution?
-   (20_snapshot_deal_source_rollup, not deal_source_rollup)
-6. Are my WHERE filters using raw values?
-   (region = 'india___sea', not region = 'ISEA')
-7. Are my SELECT display values using mappings?
-   (CASE WHEN region='india___sea' THEN 'ISEA' for presentation)
-8. For MQL→Deal conversion, am I joining via gs_DealContactAssociation?
- 
-=================================================================
-RESPONSE LENGTH GUIDELINES
-=================================================================
- 
-Match response length to query complexity:
- 
-1. **SHORT ANSWER FORMAT** (for simple metric queries)
-   Triggers: "How many [X] deals?", "What's the total amount?", single metric
-   Format: **[Number] deals, $[Amount]M**
-   Example: "**35 deals, $16.9M**
-   (FY27 active pipeline, 20%-75% stages)"
- 
-2. **MEDIUM ANSWER FORMAT** (for breakdown queries)
-   Triggers: "Break down by [X]", "Show me by region/stage/source", "Top 10 [X]"
-   Format: Brief summary line + data table (5-10 rows max)
- 
-3. **FULL ANSWER FORMAT** (for analysis queries)
-   Triggers: "Analyze [X]", "What insights", "Show trends", "Compare [X] vs [Y]"
-   Format: Executive summary + tables + visual indicators + insights + filters
- 
-4. **LIST FORMAT** (for detail queries)
-   Triggers: "List all [X]", "Show me the deals", "Which deals are [X]?"
-   Format: Count + value summary + table (max 100 rows) + minimal commentary
- 
-RESPONSE LENGTH RULES:
-✅ Default to SHORT unless user asks for breakdown, analysis, or list
-✅ Always include filters applied (one line for short answers)
-✅ Skip insights/recommendations in short answers
-✅ Use bold for key numbers even in short format
-❌ No lengthy introductions for simple queries
-❌ No "Here's what I found..." preambles
-❌ No "Would you like to see..." follow-ups unless directly relevant
-
-=================================================================
-DATE FIELD SELECTION RULES — CRITICAL
-=================================================================
-
-When a user asks a question, determine the INTENT first, then
-pick the correct date field accordingly:
-
-── 1. ACTIVE PIPELINE QUESTIONS ─────────────────────────────────
-Keywords: "active pipeline", "current pipeline", "open deals",
-          "deals in pipeline", "pipeline value", "pipeline by region/stage/source"
-
-→ ALWAYS filter by CLOSE DATE (when the deal is expected to close):
-    toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) >= 'FY_START'
-    toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) <= 'FY_END'
-
-  FY27: close_date >= '2026-04-01' AND close_date <= '2027-03-31'
-  FY26: close_date >= '2025-04-01' AND close_date <= '2026-03-31'
-
-  NEVER use became_X_deal_date for active pipeline questions.
-
-── 2. STAGE-SPECIFIC / COHORT QUESTIONS ─────────────────────────
-Keywords: "5% deals", "10% deals", "20% qualified deals",
-          "entered X stage", "reached X stage", "cohort",
-          "funnel conversion", "how many deals passed X%"
-
-→ Use the became_X_deal_date that matches the stage asked about:
-
-  Stage asked     →  Date field to use
-  ─────────────────────────────────────────────────────
-  5%  / IQM Held  →  became_5_deal_date  >= 'FY_START'
-  10% / Discovery →  became_10_deal_date >= 'FY_START'
-  20% / Solution  →  became_20_deal_date >= 'FY_START'
-  30% / Proof     →  became_30_deal_date >= 'FY_START'
-  40% / Proposal  →  became_40_deal_date >= 'FY_START'
-  60% / Price Neg →  became_60_deal_date >= 'FY_START'
-  75% / Contract  →  became_75_deal_date >= 'FY_START'
-
-  Also include all downstream stages in the deal_stage filter:
-  e.g. "FY27 20% cohort" → became_20_deal_date >= '2026-04-01'
-       AND deal_stage IN ('20% - Solution','30% - Proof',
-           '40% - Proposal','60% - Price Negotiation',
-           '75% - Contract Review','90% - Deal Desk Review',
-           'Closed Won','Closed Lost','Prospect Disengaged',
-           "Didn't Qualify",'Deal on Hold')
-
-── 3. WIN / LOSS QUESTIONS ──────────────────────────────────────
-Keywords: "closed won", "closed lost", "win rate", "won deals",
-          "lost deals", "wins this quarter/year"
-
-→ Use close_date for the period the deal closed:
-    AND deal_stage IN ('Closed Won','90% - Deal Desk Review')
-    AND toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) >= 'FY_START'
-    AND toDate(LEFT(coalesce(close_date,'1900-01-01'),10)) <= 'FY_END'
-
-  OR use became_5_deal_date cohort if user asks:
-  "win rate for deals that entered pipeline in FY27"
-
-── 4. MQL QUESTIONS ─────────────────────────────────────────────
-Keywords: "MQL", "marketing qualified lead", "leads", "contacts",
-          "MQL conversion", "MQL by source/region", "MQL targets"
-
-→ ALWAYS use the MQL entry date field:
-    date_entered_marketing_qualified_lead_lifecycle_stage_pipeline
-
-  Cast pattern:
-    CAST(LEFT(coalesce(
-      date_entered_marketing_qualified_lead_lifecycle_stage_pipeline,
-      '1900-01-01'), 10) AS DATE) AS date_entered_mql
-
-  FY27 MQL cohort: date_entered_mql >= '2026-04-01'
-  FY26 MQL cohort: date_entered_mql >= '2025-04-01'
-                   AND date_entered_mql < '2026-04-01'
-
-  NEVER use close_date or became_X_deal_date for MQL questions.
-
-── 5. DEAL CREATION QUESTIONS ───────────────────────────────────
-Keywords: "deals created", "new deals", "deals added", "created in"
-
-→ Use create_date:
-    toDate(LEFT(coalesce(create_date,'1900-01-01'),10)) >= 'FY_START'
-    toDate(LEFT(coalesce(create_date,'1900-01-01'),10)) <= 'FY_END'
-
-── 6. LAST CONTACTED / STALLED QUESTIONS ────────────────────────
-Keywords: "last contacted", "no activity", "stalled", "not touched"
-
-→ Use last_contacted:
-    toDate(LEFT(coalesce(last_contacted,'1900-01-01'),10))
-
-── DECISION TREE — WHICH DATE FIELD? ────────────────────────────
-
-  User asks about...               → Date field to use
-  ─────────────────────────────────────────────────────────────
-  Active pipeline / open deals     → close_date (FY range)
-  Deals closing this month/quarter → close_date
-  Deals at a specific % stage      → became_X_deal_date
-  Funnel conversion / cohort       → became_X_deal_date
-  MQL / leads / contacts           → date_entered_mql
-  Closed won / lost deals          → close_date (when closed)
-  Win rate for a cohort            → became_5_deal_date (entry)
-  New deals added                  → create_date
-  Stalled / no activity            → last_contacted
-  Deal approval timing             → became_X_deal_date
-
-── COMMON MISTAKES TO AVOID ─────────────────────────────────────
-❌ Using became_20_deal_date to filter "active pipeline"
-   → Active pipeline = close_date within FY range
-
-❌ Using close_date to filter "FY27 20% cohort"
-   → 20% cohort = became_20_deal_date >= '2026-04-01'
-
-❌ Using close_date or became_X for MQL questions
-   → MQL questions always use date_entered_mql
-
-❌ Using create_date for pipeline or cohort analysis
-   → create_date is only for "when was the deal created"
-
-=================================================================
- 
 =================================================================
 QUERY RULES
 =================================================================
@@ -1495,34 +437,18 @@ QUERY RULES
 4. Always LIMIT row-level queries (max 100 rows)
 5. Use countDistinct(deal_id) for unique deal counts
 6. Use round(sum(amount)/1e6, 1) for $M dollar amounts
-7. Use ILIKE for case-insensitive text matching
-8. Dates are stored as strings — always cast: toDate(LEFT(coalesce(col,'1900-01-01'),10))
-9. Null date sentinel is '1900-01-01' — exclude with: col <> '1900-01-01' AND col IS NOT NULL
-10. Default fiscal year context is FY27 (Apr 2026 – Mar 2027) unless user specifies otherwise
-11. Active pipeline = close_date within FY range (NOT became_X_deal_date)
-12. MQL → Deal joins MUST use kore_ai_hubspot.gs_DealContactAssociation
- 
+7. Dates stored as strings — always cast: toDate(LEFT(coalesce(col,'1900-01-01'),10))
+8. Default fiscal year context is FY27 unless user specifies otherwise
+
 CORE RULES:
 - NEVER say you lack database access. You always have it via the tool.
 - NEVER fabricate numbers. Query the DB for every metric question.
-- NEVER run destructive SQL (INSERT / UPDATE / DELETE / DROP / ALTER / TRUNCATE).
-- If query_clickhouse returns text starting with DATABASE CONNECTION FAILED or ERROR:,
-  STOP immediately and show: '⚠️ Database unreachable. Please check your connection and try again.'
-  DO NOT attempt alternative queries or explain what you were going to do.
-- ALWAYS use the fully qualified table name: database.table.
+- NEVER run destructive SQL.
 - Answer in clean markdown: use tables for data, bold for key numbers.
 - Be concise but complete.
 - When generating export content, use ## section headers.
-- When user asks a question, confirm filters before proceeding:
-  "I'll analyze [topic]. Let me confirm the filters:
-  - Fiscal Year: FY27 (Apr 2026 - Mar 2027)
-  - Active Pipeline: close_date Apr 2026 – Mar 2027
-  - Industry: [if applicable]
-  - Region: [if applicable]
-  Should I proceed with these, or would you like different filters?"
 
 """
-
 
 
 # Initialise with a placeholder — will be replaced on startup
@@ -1534,11 +460,6 @@ _SYSTEM_PROMPT = _build_system_prompt()
 # =============================================================================
 
 def run_clickhouse_query(sql: str) -> str:
-    """
-    POST /query  body: {{"query": "<SQL>"}}
-    Returns plain-text table or error string starting with ERROR:/DATABASE.
-    Never raises.
-    """
     base_url = _base_url()
     token    = _token()
 
@@ -1566,7 +487,7 @@ def run_clickhouse_query(sql: str) -> str:
         resp = httpx.post(
             f"{base_url}/query",
             headers=_auth_headers(),
-            json={"query": sql},   # ← "query" field confirmed by your OpenAPI spec
+            json={"query": sql},
             timeout=30,
         )
 
@@ -1576,24 +497,18 @@ def run_clickhouse_query(sql: str) -> str:
             return "DATABASE CONNECTION FAILED: 403 Forbidden."
         if resp.status_code == 422:
             detail = resp.text[:600]
-            print(f"   422: {detail}")
             return f"ERROR: Proxy rejected the query (422). Detail: {detail}"
         if resp.status_code == 500:
             detail = resp.text[:600]
-            print(f"   500: {detail}")
             return (
                 f"DATABASE ERROR: HTTP 500 Internal Server Error from the proxy.\n"
-                f"This usually means the SQL references a table or column that doesn't exist.\n"
                 f"Detail: {detail}"
             )
         if resp.status_code != 200:
             return f"DATABASE ERROR: HTTP {resp.status_code} — {resp.text[:400]}"
 
         payload = resp.json()
-        print(f"   Response shape: {type(payload).__name__}, "
-              f"keys={list(payload.keys()) if isinstance(payload, dict) else 'list'}")
 
-        # Normalise to a list of rows
         if isinstance(payload, list):
             rows = payload
         elif isinstance(payload, dict):
@@ -1609,7 +524,6 @@ def run_clickhouse_query(sql: str) -> str:
         if not rows:
             return "Query returned 0 rows."
 
-        # Build text table
         if isinstance(rows[0], dict):
             cols   = list(rows[0].keys())
             header = " | ".join(cols)
@@ -1625,7 +539,6 @@ def run_clickhouse_query(sql: str) -> str:
             lines.append(f"... ({len(rows) - 100} more rows not shown)")
 
         result = "\n".join(lines)
-        print(f"   ✅ {len(rows)} rows. Preview: {result[:200]}")
         return result
 
     except httpx.ConnectError as e:
@@ -1638,7 +551,7 @@ def run_clickhouse_query(sql: str) -> str:
 
 
 # =============================================================================
-# Startup event — discover schema and build system prompt
+# Startup event
 # =============================================================================
 
 @app.on_event("startup")
@@ -1647,7 +560,6 @@ async def on_startup():
     discover_schema()
     _SYSTEM_PROMPT = _build_system_prompt()
     print("🚀 System prompt built with live schema.")
-    print(_SYSTEM_PROMPT[:800])
 
 
 # =============================================================================
@@ -1690,10 +602,19 @@ class ChatRequest(BaseModel):
     message: str
     history: List[ChatMessage] = []
 
-class ExportRequest(BaseModel):
-    format: Literal["pdf", "pptx"]
+class ExportPreviewRequest(BaseModel):
+    """Request to generate a preview of the export document from conversation."""
     conversation: List[ChatMessage] = []
-    title: str = "Deals Intelligence Report"
+    title: str = "Pipeline Intelligence Report"
+    export_type: Literal["pdf", "pptx"] = "pdf"
+    detail_level: Literal["summary", "detailed"] = "detailed"
+    sections_to_include: Optional[List[str]] = None  # None = include all
+
+class ExportDownloadRequest(BaseModel):
+    """Request to download the final document."""
+    format: Literal["pdf", "pptx"]
+    content: str          # The pre-generated markdown content from preview
+    title: str = "Pipeline Intelligence Report"
 
 
 # =============================================================================
@@ -1709,9 +630,6 @@ def _extract_text(content_blocks) -> str:
 def _call_claude(messages: list, max_tokens: int = 2048) -> str:
     """Run Claude with query_clickhouse tool. Up to 5 tool rounds."""
 
-    # Sanitize: strip tool_use/tool_result content blocks from incoming history.
-    # Export passes raw chat history where assistant turns contain tool_use blocks
-    # without matching tool_result blocks → Anthropic API throws HTTP 400.
     safe_messages = []
     for m in messages:
         content = m.get("content", "")
@@ -1778,10 +696,83 @@ def _call_claude(messages: list, max_tokens: int = 2048) -> str:
         reply = (
             "⚠️ No response was generated.\n\n"
             "This usually means the ClickHouse query failed. "
-            "Open **/debug/db** to diagnose, then verify `CLICKHOUSE_API_URL` "
-            "and `CLICKHOUSE_API_TOKEN` in `.env` and restart."
+            "Open **/debug/db** to diagnose."
         )
     return reply
+
+
+# =============================================================================
+# Export content generation — AI-driven document structuring
+# =============================================================================
+
+def _generate_export_content(
+    conversation: List[ChatMessage],
+    title: str,
+    export_type: str,
+    detail_level: str,
+    sections_to_include: Optional[List[str]] = None,
+) -> str:
+    """
+    Use Claude to intelligently structure the conversation into a
+    well-formatted document. Returns markdown text.
+    """
+
+    # Build conversation context
+    conv_text = "\n\n".join(
+        f"{'USER' if m.role == 'user' else 'DIUD AGENT'}: {m.content}"
+        for m in conversation
+    )
+
+    sections_hint = ""
+    if sections_to_include:
+        sections_hint = f"\nOnly include these sections: {', '.join(sections_to_include)}"
+
+    detail_hint = (
+        "Include all data, tables, and detailed analysis from the conversation."
+        if detail_level == "detailed"
+        else "Provide a high-level executive summary with key metrics and insights only."
+    )
+
+    format_hint = (
+        "Format for a PowerPoint presentation: use SLIDE: <title> for each slide, followed by bullet points."
+        if export_type == "pptx"
+        else "Format as a professional PDF report with ## section headers, tables, and narrative prose."
+    )
+
+    prompt = f"""You are preparing a professional export document from a data intelligence conversation.
+
+CONVERSATION:
+{conv_text}
+
+TASK:
+Create a well-structured {export_type.upper()} document titled "{title}".
+
+{format_hint}
+{detail_hint}
+{sections_hint}
+
+REQUIREMENTS:
+- Extract all key metrics, data tables, and insights from the conversation
+- Organize logically with clear sections
+- Preserve all numerical data accurately
+- Add an executive summary at the start
+- Include a "Key Recommendations" section at the end if insights warrant it
+- Make it suitable for a business audience
+- Today's date: {date.today().strftime('%B %d, %Y')}
+
+Generate the document content now:"""
+
+    messages = [{"role": "user", "content": prompt}]
+
+    response = _ai_client.messages.create(
+        model=_CLAUDE_MODEL,
+        system="You are a professional business report writer. Generate clean, well-structured document content.",
+        messages=messages,
+        temperature=0,
+        max_tokens=4096,
+    )
+
+    return _extract_text(response.content)
 
 
 # =============================================================================
@@ -1798,9 +789,9 @@ def root():
 def serve_logo():
     return FileResponse("logo.png", media_type="image/png")
 
+
 @app.get("/debug/db")
 def debug_db():
-    """Full connectivity + schema diagnostic. Open: http://localhost:8000/debug/db"""
     base_url = _base_url()
     token    = _token()
 
@@ -1818,21 +809,18 @@ def debug_db():
 
     tests = {}
 
-    # Health check
     try:
         r = httpx.get(base_url, timeout=10)
         tests["GET /"] = {"status": r.status_code, "body": r.text[:200]}
     except Exception as e:
         tests["GET /"] = {"error": str(e)}
 
-    # List databases
     try:
         r = httpx.get(f"{base_url}/databases", headers=_auth_headers(), timeout=10)
         tests["GET /databases"] = {"status": r.status_code, "body": r.text[:400]}
     except Exception as e:
         tests["GET /databases"] = {"error": str(e)}
 
-    # Ping query
     ping = run_clickhouse_query("SELECT 1 AS ping")
     query_ok = not any(ping.startswith(p) for p in [
         "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
@@ -1840,25 +828,20 @@ def debug_db():
     tests["POST /query (SELECT 1)"] = {"result": ping, "ok": query_ok}
 
     return {
-        "status":           "OK" if query_ok else "FAILED",
-        "config":           config,
+        "status":            "OK" if query_ok else "FAILED",
+        "config":            config,
         "discovered_tables": list(_LIVE_SCHEMA.keys()),
-        "tests":            tests,
+        "tests":             tests,
         "recommendation": (
             "✅ DB connected. Schema loaded. Chat is ready."
             if query_ok else
-            "❌ Query test failed. See 'POST /query' result for the exact error.\n"
-            "Common causes:\n"
-            "  401 → wrong token\n"
-            "  ConnectError → wrong URL or proxy down\n"
-            "  500 → SQL error (wrong table/column)"
+            "❌ Query test failed. See 'POST /query' result for the exact error."
         ),
     }
 
 
 @app.post("/refresh-schema")
 def refresh_schema():
-    """Re-discover schema from the proxy and rebuild the system prompt."""
     global _SYSTEM_PROMPT
     schema = discover_schema()
     _SYSTEM_PROMPT = _build_system_prompt()
@@ -1883,122 +866,81 @@ def chat(payload: ChatRequest):
     return {"reply": reply}
 
 
-class ExportRequest(BaseModel):
-    format: Literal["pdf", "pptx"]
-    conversation: List[dict]
-    title: str = "Pipeline Intelligence Report"
-    
-    
-@app.post("/export/pdf")
-async def export_pdf(req: ExportRequest):
+# =============================================================================
+# NEW: Export Preview — generates document content for side panel
+# =============================================================================
 
-    buffer = io.BytesIO()
+@app.post("/export/preview")
+async def export_preview(req: ExportPreviewRequest):
+    """
+    Generate a preview of the document from conversation context.
+    Returns the structured markdown content for display in the side panel.
+    """
+    if not req.conversation:
+        raise HTTPException(status_code=400, detail="No conversation to export.")
 
-    doc = BaseDocTemplate(
-        buffer,
-        pagesize=A4,
-        leftMargin=40,
-        rightMargin=40,
-        topMargin=40,
-        bottomMargin=40,
-    )
+    print(f"📄 [export/preview] type={req.export_type} detail={req.detail_level} msgs={len(req.conversation)}")
 
-    frame = Frame(
-        doc.leftMargin,
-        doc.bottomMargin,
-        doc.width,
-        doc.height,
-        id='normal'
-    )
-
-    template = PageTemplate(id='test', frames=frame)
-    doc.addPageTemplates([template])
-
-    styles = {
-        "title": ParagraphStyle(
-            "title",
-            fontSize=20,
-            leading=24,
-            spaceAfter=20,
-        ),
-        "header": ParagraphStyle(
-            "header",
-            fontSize=14,
-            leading=18,
-            spaceAfter=10,
-            textColor=colors.HexColor("#0D1B3E"),
-        ),
-        "body": ParagraphStyle(
-            "body",
-            fontSize=10,
-            leading=15,
+    try:
+        content = _generate_export_content(
+            conversation=req.conversation,
+            title=req.title,
+            export_type=req.export_type,
+            detail_level=req.detail_level,
+            sections_to_include=req.sections_to_include,
         )
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Content generation error: {exc}")
+
+    return {
+        "content": content,
+        "title": req.title,
+        "export_type": req.export_type,
+        "word_count": len(content.split()),
+        "generated_at": date.today().isoformat(),
     }
 
-    story = []
 
-    story.append(Paragraph(req.title, styles["title"]))
-    story.append(Spacer(1, 12))
+# =============================================================================
+# NEW: Export Download — builds and streams the actual file
+# =============================================================================
 
-    for msg in req.conversation:
+@app.post("/export/download")
+async def export_download(req: ExportDownloadRequest):
+    """
+    Build the final file (PDF or PPTX) from pre-generated content
+    and stream it back as a download.
+    """
+    print(f"⬇️  [export/download] format={req.format} title={req.title}")
 
-        role = msg["role"].upper()
-        content = msg["content"].replace("\n", "<br/>")
+    try:
+        if req.format == "pdf":
+            file_bytes = _build_pdf(req.title, req.content)
+            return StreamingResponse(
+                io.BytesIO(file_bytes),
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{_safe_filename(req.title)}.pdf"'
+                },
+            )
+        else:
+            file_bytes = _build_pptx(req.title, req.content)
+            return StreamingResponse(
+                io.BytesIO(file_bytes),
+                media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{_safe_filename(req.title)}.pptx"'
+                },
+            )
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"File generation error: {exc}")
 
-        story.append(
-            Paragraph(f"<b>{role}</b>", styles["header"])
-        )
 
-        story.append(
-            Paragraph(content, styles["body"])
-        )
-
-        story.append(Spacer(1, 16))
-
-    doc.build(story)
-
-    buffer.seek(0)
-
-    return StreamingResponse(
-        buffer,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition":
-            "attachment; filename=pipeline-report.pdf"
-        },
-    )
-
-@app.post("/export/pptx")
-async def export_pptx(req: ExportRequest):
-
-    prs = Presentation()
-
-    slide_layout = prs.slide_layouts[1]
-
-    for idx, msg in enumerate(req.conversation):
-
-        slide = prs.slides.add_slide(slide_layout)
-
-        title = slide.shapes.title
-        title.text = f"{msg['role'].upper()}"
-
-        body = slide.placeholders[1]
-        body.text = msg["content"]
-
-    output = io.BytesIO()
-
-    prs.save(output)
-
-    output.seek(0)
-
-    return StreamingResponse(
-        output,
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        headers={
-            "Content-Disposition":
-            "attachment; filename=pipeline-report.pptx"
-        },
-    )
+def _safe_filename(title: str) -> str:
+    """Convert title to safe filename."""
+    return re.sub(r'[^\w\-]', '_', title)[:50]
 
 
 # =============================================================================
@@ -2020,6 +962,10 @@ _SECTION_COLORS = {
     "win":       colors.HexColor("#B71C1C"),
     "loss":      colors.HexColor("#B71C1C"),
     "recommend": colors.HexColor("#1B5E20"),
+    "summary":   colors.HexColor("#0D1B3E"),
+    "analysis":  colors.HexColor("#1565C0"),
+    "overview":  colors.HexColor("#004D40"),
+    "insight":   colors.HexColor("#1B5E20"),
 }
 
 PW, PH = A4
@@ -2036,6 +982,8 @@ def _strip_md(t: str) -> str:
     t = re.sub(r'#{1,6}\s*', '', t)
     t = re.sub(r'^[\-\*•]\s*', '', t, flags=re.M)
     t = re.sub(r'`(.*?)`', r'\1', t)
+    # Escape XML-reserved characters for ReportLab
+    t = t.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     return t.strip()
 
 
@@ -2103,33 +1051,41 @@ def _build_pdf(title: str, report_text: str) -> bytes:
         PageBreak(),
     ]
 
-    for sec_title, sec_body in sections:
-        color_key = next((k for k in _SECTION_COLORS if k in sec_title.lower()), None)
-        bar_color = _SECTION_COLORS.get(color_key, _C_BLUE)
-        story.append(Table(
-            [[Paragraph(sec_title.upper(), styles["Section_H"])]],
-            colWidths=[_CW],
-            style=TableStyle([
-                ("BACKGROUND",    (0, 0), (-1, -1), bar_color),
-                ("TOPPADDING",    (0, 0), (-1, -1), 8),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-                ("LEFTPADDING",   (0, 0), (-1, -1), 10),
-            ])
-        ))
-        story.append(Spacer(1, 6))
-        for line in sec_body.split("\n"):
+    if not sections:
+        # Fallback: just dump the text
+        for line in report_text.split("\n"):
             line = line.strip()
-            if not line:
-                story.append(Spacer(1, 3))
-            elif line.startswith("### "):
-                story.append(Paragraph(_strip_md(line), styles["H3"]))
-            elif line.startswith("## "):
-                story.append(Paragraph(_strip_md(line), styles["H2"]))
-            elif line.startswith(("- ", "* ", "• ")):
-                story.append(Paragraph("• " + _strip_md(line[2:]), styles["Bullet"]))
-            else:
+            if line:
                 story.append(Paragraph(_strip_md(line), styles["Body"]))
-        story.extend([Spacer(1, 12), PageBreak()])
+        story.append(Spacer(1, 6))
+    else:
+        for sec_title, sec_body in sections:
+            color_key = next((k for k in _SECTION_COLORS if k in sec_title.lower()), None)
+            bar_color = _SECTION_COLORS.get(color_key, _C_BLUE)
+            story.append(Table(
+                [[Paragraph(sec_title.upper(), styles["Section_H"])]],
+                colWidths=[_CW],
+                style=TableStyle([
+                    ("BACKGROUND",    (0, 0), (-1, -1), bar_color),
+                    ("TOPPADDING",    (0, 0), (-1, -1), 8),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+                    ("LEFTPADDING",   (0, 0), (-1, -1), 10),
+                ])
+            ))
+            story.append(Spacer(1, 6))
+            for line in sec_body.split("\n"):
+                line = line.strip()
+                if not line:
+                    story.append(Spacer(1, 3))
+                elif line.startswith("### "):
+                    story.append(Paragraph(_strip_md(line), styles["H3"]))
+                elif line.startswith("## "):
+                    story.append(Paragraph(_strip_md(line), styles["H2"]))
+                elif line.startswith(("- ", "* ", "• ")):
+                    story.append(Paragraph("• " + _strip_md(line[2:]), styles["Bullet"]))
+                else:
+                    story.append(Paragraph(_strip_md(line), styles["Body"]))
+            story.extend([Spacer(1, 12), PageBreak()])
 
     doc.build(story)
     return buf.getvalue()
@@ -2155,6 +1111,10 @@ _SLIDE_ACCENT = {
     "win":       RGBColor(0x2E, 0x7D, 0x32),
     "loss":      RGBColor(0xC6, 0x28, 0x28),
     "recommend": RGBColor(0x1B, 0x5E, 0x20),
+    "summary":   RGBColor(0x1E, 0x88, 0xE5),
+    "analysis":  RGBColor(0x00, 0x89, 0x7B),
+    "insight":   RGBColor(0x1B, 0x5E, 0x20),
+    "executive": RGBColor(0x0D, 0x1B, 0x3E),
 }
 
 
