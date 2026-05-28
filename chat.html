@@ -686,6 +686,7 @@
             <select class="ep-select" id="ep-format">
               <option value="pdf">📄 PDF Report</option>
               <option value="pptx">📊 PowerPoint</option>
+              <option value="csv">📋 CSV (raw data)</option>
             </select>
           </div>
           <div class="ep-input-group">
@@ -703,6 +704,8 @@
           </svg>
           Generate Preview
         </button>
+        <!-- Dataset badge: shown when a query result is stored for this session -->
+        <div id="ep-dataset-badge" style="display:none;align-items:center;gap:6px;padding:6px 10px;background:#E8F5E9;border-radius:7px;font-size:11.5px;color:#2E7D32;font-weight:500;border:1px solid #C8E6C9;"></div>
       </div>
     </div>
 
@@ -778,7 +781,14 @@
         </svg>
         Download PPTX
       </button>
-      <!-- CSV: full dataset is now included inside PDF/PPTX automatically -->
+      <!-- CSV: full dataset from server session store, no row cap -->
+      <button class="ep-download-btn btn-csv-dl" id="ep-dl-csv" onclick="downloadCSV()" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        <span id="ep-csv-label">Download CSV</span>
+      </button>
     </div>
 
   </aside><!-- /export-panel -->
@@ -791,34 +801,22 @@
   /* ======================================================================
      STATE
      ====================================================================== */
+  const SESSION_ID  = crypto.randomUUID();   // stable for this browser tab
   let history       = [];        // chat history [{role, content}]
   let busy          = false;     // chat in-flight
   let panelOpen     = false;     // export panel visible?
   let previewContent = null;     // last generated markdown content
   let exportBusy    = false;     // export generation in-flight
+  let datasetRows   = 0;         // rows in server-side session store
 
   /* ======================================================================
-     EXPORT INTENT DETECTION — recognise when user wants to export
+     EXPORT FORMAT DETECTION (used to pre-fill the panel selector)
      ====================================================================== */
-  const EXPORT_PATTERNS = [
-    /export\s+(this|the|my|our)?\s*(conversation|chat|analysis|data|report|session)?/i,
-    /download\s+(as|this|the)?\s*(pdf|pptx|powerpoint|report|presentation|doc)/i,
-    /create\s+(a|this)?\s*(pdf|pptx|presentation|deck|report|document|slide)/i,
-    /generate\s+(a|the)?\s*(report|pdf|pptx|presentation|document|summary)/i,
-    /save\s+(this|as)?\s*(pdf|pptx|report|presentation|document)/i,
-    /make\s+(a|this)?\s*(pdf|pptx|report|presentation|document|summary)/i,
-    /turn\s+(this|the)?\s*(into|to)\s*(a)?\s*(pdf|pptx|presentation|report|document)/i,
-    /convert\s+(this|to)?\s*(pdf|pptx|presentation|report)/i,
-  ];
-
-  function detectExportIntent(text) {
-    return EXPORT_PATTERNS.some(p => p.test(text));
-  }
-
   function detectExportFormat(text) {
     if (/pptx|powerpoint|presentation|slide|deck/i.test(text)) return 'pptx';
+    if (/csv/i.test(text)) return 'csv';
     if (/pdf/i.test(text)) return 'pdf';
-    return null; // user didn't specify
+    return null;
   }
 
   /* ======================================================================
@@ -877,36 +875,17 @@
     input.style.height = "auto";
     setBusy(true);
 
-    // --- Export intent detection ---
-    if (detectExportIntent(text)) {
-      const fmt = detectExportFormat(text);
-
-      // Respond in chat
-      const typingId = addTyping();
-      await sleep(400);
-      removeTyping(typingId);
-
-      const exportMsg = `📄 **Opening export panel...**\n\nI'll prepare a document from our conversation. ` +
-        (fmt ? `I detected you want a **${fmt.toUpperCase()}** — I've pre-selected that for you.` :
-               `You can choose PDF or PowerPoint in the side panel.`) +
-        `\n\nConfigure the options in the panel and click **Generate Preview** to see a formatted preview before downloading.`;
-
-      appendBubble("assistant", exportMsg);
-      history.push({ role: "assistant", content: exportMsg });
-      setBusy(false);
-
-      // Open panel with pre-filled format if detected
-      openExportPanel(fmt);
-      return;
-    }
-
-    // --- Normal chat flow ---
+    // --- Send to server (Claude decides if it's an export intent) ---
     const typingId = addTyping();
     try {
       const res = await fetch("/chat", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ message: text, history: history.slice(0, -1) }),
+        body:    JSON.stringify({
+          message:    text,
+          history:    history.slice(0, -1),
+          session_id: SESSION_ID,
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -914,8 +893,26 @@
       }
       const data = await res.json();
       removeTyping(typingId);
-      appendBubble("assistant", data.reply);
-      history.push({ role: "assistant", content: data.reply });
+
+      // Update stored row count whenever the server updates its dataset
+      if (data.dataset_rows > 0) {
+        datasetRows = data.dataset_rows;
+        updateDatasetBadge();
+      }
+
+      // Server signals export intent via __EXPORT_INTENT__ in reply
+      if (data.export_intent) {
+        // Strip the marker from the visible reply
+        const visibleReply = data.reply.replace('__EXPORT_INTENT__', '').trim();
+        appendBubble("assistant", visibleReply);
+        history.push({ role: "assistant", content: visibleReply });
+        const fmt = detectExportFormat(text);
+        openExportPanel(fmt);
+      } else {
+        appendBubble("assistant", data.reply);
+        history.push({ role: "assistant", content: data.reply });
+      }
+
     } catch (err) {
       removeTyping(typingId);
       appendBubble("assistant", `⚠️ **Error:** ${err.message}`);
@@ -931,6 +928,18 @@
   }
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  /* Shows a small badge in the export panel when a dataset is ready */
+  function updateDatasetBadge() {
+    const badge = document.getElementById("ep-dataset-badge");
+    if (!badge) return;
+    if (datasetRows > 0) {
+      badge.textContent = `📊 ${datasetRows.toLocaleString()} rows ready to export`;
+      badge.style.display = "flex";
+    } else {
+      badge.style.display = "none";
+    }
+  }
 
   /* ======================================================================
      BUBBLE HELPERS
@@ -1085,8 +1094,9 @@
         body:    JSON.stringify({
           conversation: history,
           title,
-          export_type: format,
+          export_type:  format === "csv" ? "pdf" : format,  // CSV has no preview; use pdf layout
           detail_level: detail,
+          session_id:   SESSION_ID,
         }),
       });
 
@@ -1097,22 +1107,37 @@
 
       const data = await res.json();
       previewContent = data.content;
+      if (data.total_rows > 0) datasetRows = data.total_rows;
 
       setProgress(100, "Done!");
       await sleep(400);
 
       // Render preview
       document.getElementById("ep-preview-content").innerHTML = marked.parse(previewContent);
+      const rowNote = data.total_rows > 0 ? ` · ${data.total_rows.toLocaleString()} rows` : "";
       document.getElementById("ep-preview-meta-text").textContent =
-        `Preview ready · ${data.word_count} words · Generated ${data.generated_at}`;
+        `Preview ready${rowNote} · ${data.word_count} words · ${data.generated_at}`;
+      if (data.filters) {
+        const meta = document.getElementById("ep-preview-meta-text");
+        meta.textContent += ` · Filters: ${data.filters}`;
+      }
 
       showPanelState("preview");
       showFooter();
 
       // Show correct download buttons
       const isPDF  = format === "pdf";
+      const isPPTX = format === "pptx";
+      const isCSV  = format === "csv";
       document.getElementById("ep-dl-pdf").style.display  = isPDF  ? "flex" : "none";
-      document.getElementById("ep-dl-pptx").style.display = !isPDF ? "flex" : "none";
+      document.getElementById("ep-dl-pptx").style.display = isPPTX ? "flex" : "none";
+      // CSV button: show when format is CSV and there's data in the session store
+      const csvBtn = document.getElementById("ep-dl-csv");
+      if (csvBtn) {
+        csvBtn.style.display = (isCSV || datasetRows > 0) ? "flex" : "none";
+        const csvLabel = document.getElementById("ep-csv-label");
+        if (csvLabel && datasetRows > 0) csvLabel.textContent = `Download All ${datasetRows.toLocaleString()} Rows (CSV)`;
+      }
 
     } catch (err) {
       showPanelState("empty");
@@ -1130,104 +1155,51 @@
   }
 
   /* ======================================================================
-     DOWNLOAD FINAL DOCUMENT
+     DOWNLOAD — PDF, PPTX, or CSV (all session-aware)
      ====================================================================== */
   async function downloadDoc(format) {
     if (!previewContent) { showToast("Generate a preview first.", "error"); return; }
-
     const title = document.getElementById("ep-title").value.trim() || "Pipeline Intelligence Report";
     const dlBtn = document.getElementById(format === "pdf" ? "ep-dl-pdf" : "ep-dl-pptx");
-
     dlBtn.disabled = true;
-    dlBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:15px;height:15px;">
-      <path d="M12 22C6.477 22 2 17.523 2 12S6.477 2 12 2s10 4.477 10 10-4.477 10-10 10z"/>
-      <path d="M12 8v4l3 3"/>
-    </svg>Building ${format.toUpperCase()}…`;
-    showToast(`Building ${format.toUpperCase()}… this may take a moment.`, "");
-
+    const orig = dlBtn.innerHTML;
+    dlBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:15px;height:15px;"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>Building…`;
+    showToast(`Building ${format.toUpperCase()}…`, "");
     try {
       const res = await fetch("/export/download", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ format, content: previewContent, title }),
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({format, content: previewContent, title, session_id: SESSION_ID}),
       });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
-      }
-
-      const blob = await res.blob();
-      const ext  = format === "pdf" ? "pdf" : "pptx";
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href     = url;
-      a.download = `${title.replace(/\s+/g,"_")}.${ext}`;
-      a.click();
-      URL.revokeObjectURL(url);
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).detail || `HTTP ${res.status}`);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(await res.blob());
+      a.download = `${title.replace(/\s+/g,"_")}.${format}`;
+      a.click(); URL.revokeObjectURL(a.href);
       showToast(`✅ ${format.toUpperCase()} downloaded!`, "success");
-
-    } catch (err) {
-      showToast("Download failed: " + err.message, "error");
-    } finally {
-      // Restore button
-      if (format === "pdf") {
-        dlBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="width:15px;height:15px;">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>Download PDF`;
-      } else {
-        dlBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="width:15px;height:15px;">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>Download PPTX`;
-      }
-      dlBtn.disabled = false;
-    }
+    } catch (err) { showToast("Download failed: " + err.message, "error"); }
+    finally { dlBtn.innerHTML = orig; dlBtn.disabled = false; }
   }
 
-  /* ======================================================================
-     DOWNLOAD CSV — exports the full un-truncated deal dataset
-     ====================================================================== */
   async function downloadCSV() {
-    const csvBtn = document.getElementById("ep-dl-csv");
     const title  = document.getElementById("ep-title").value.trim() || "deals-export";
-    const count  = document.getElementById("ep-csv-count").textContent;
-
-    csvBtn.disabled = true;
-    const origHTML  = csvBtn.innerHTML;
-    csvBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:15px;height:15px;">
-      <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-    </svg>Building CSV…`;
-    showToast(`Preparing ${count} rows as CSV…`, "");
-
+    const csvBtn = document.getElementById("ep-dl-csv");
+    const orig   = csvBtn ? csvBtn.innerHTML : "";
+    if (csvBtn) csvBtn.disabled = true;
+    showToast(`Exporting ${datasetRows > 0 ? datasetRows.toLocaleString()+" rows" : "data"} as CSV…`, "");
     try {
-      const res = await fetch("/export/csv", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ conversation: history, title }),
+      const res = await fetch("/export/download", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({format:"csv", title, session_id: SESSION_ID}),
       });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
-      }
-
-      const blob = await res.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href     = url;
-      a.download = `${title.replace(/\s+/g, "_")}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showToast(`✅ CSV exported — all ${count} rows!`, "success");
-
-    } catch (err) {
-      showToast("CSV export failed: " + err.message, "error");
-    } finally {
-      csvBtn.innerHTML = origHTML;
-      csvBtn.disabled  = false;
-    }
+      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).detail || `HTTP ${res.status}`);
+      const totalRows = res.headers.get("X-Total-Rows") || datasetRows;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(await res.blob());
+      a.download = `${title.replace(/\s+/g,"_")}.csv`;
+      a.click(); URL.revokeObjectURL(a.href);
+      showToast(`✅ CSV exported — all ${Number(totalRows).toLocaleString()} rows!`, "success");
+    } catch (err) { showToast("CSV export failed: " + err.message, "error"); }
+    finally { if (csvBtn) { csvBtn.innerHTML = orig; csvBtn.disabled = false; } }
   }
 
   /* ======================================================================
@@ -1236,6 +1208,7 @@
   function newChat() {
     history = [];
     previewContent = null;
+    datasetRows    = 0;
     const msgs = document.getElementById("messages");
     msgs.innerHTML = `
       <div id="welcome">
@@ -1247,8 +1220,9 @@
         <h2>Hey, I'm DIUD 👋</h2>
         <p>I'm your Data Intelligence Agent here to help you analyse live ClickHouse or Web data.<br>
            Ask me about pipeline deals, AE performance, win/loss analysis, BANT rates, regional breakdowns, and more.<br><br>
-           <em style="color:var(--txt-dim);font-size:12px;">💡 Tip: Type "export this as PDF" or "create a presentation" to export your analysis.</em></p>
+           <em style="color:var(--txt-dim);font-size:12px;">💡 Tip: Ask "give me those 256 deals as CSV" or "export as PDF" to download the exact data.</em></p>
       </div>`;
+    updateDatasetBadge();
     if (panelOpen) closeExportPanel();
   }
 
