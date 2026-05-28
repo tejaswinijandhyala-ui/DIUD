@@ -744,6 +744,84 @@ CONVERSION DEFINITIONS:
 NOTE: gs_DealContactAssociation is the ONLY correct join key between
 contacts and deals. Always use countDistinct() to avoid double-counting
 when one MQL contact is associated with multiple deals.
+
+=================================================================
+DEAL STAGE ORDERING RULES — ALWAYS APPLY
+=================================================================
+
+Whenever results are grouped or broken down by deal_stage, ALWAYS
+order by the canonical funnel sequence, NOT alphabetically or by
+count/value.
+
+MANDATORY stage sort order (use ORDER BY CASE in SQL):
+
+ORDER BY
+  CASE d.deal_stage
+    WHEN '1% - IQM Scheduled'      THEN 1
+    WHEN '5% - IQM Held'           THEN 2
+    WHEN '10% - Discovery'         THEN 3
+    WHEN '20% - Solution'          THEN 4
+    WHEN '30% - Proof'             THEN 5
+    WHEN '40% - Proposal'          THEN 6
+    WHEN '60% - Price Negotiation' THEN 7
+    WHEN '75% - Contract Review'   THEN 8
+    WHEN '90% - Deal Desk Review'  THEN 9
+    WHEN 'Closed Won'              THEN 10
+    WHEN 'Deal on Hold'            THEN 11
+    WHEN 'Closed Lost'             THEN 12
+    WHEN 'Prospect Disengaged'     THEN 13
+    WHEN "Didn't Qualify"          THEN 14
+    ELSE 99
+  END
+
+This applies to ALL queries that GROUP BY deal_stage, including:
+- "deals in each stage"
+- "pipeline by stage"
+- "how many deals per stage"
+- "deals created in different stages"
+- "breakdown by stage"
+- "count by stage"
+- funnel analysis queries
+- cohort progression queries
+
+NEVER use ORDER BY deal_stage (alphabetical) or ORDER BY deal_count
+or ORDER BY pipeline_m when the primary grouping is by stage.
+The funnel order above is ALWAYS the correct sort.
+
+EXAMPLE — correct stage-grouped query:
+SELECT
+  d.deal_stage,
+  countDistinct(d.deal_id) AS deal_count,
+  round(sum(d.amount)/1e6, 1) AS pipeline_m
+FROM hs_analytics.deals d FINAL
+WHERE d.pipeline = 'default'
+  AND CASE WHEN d.deal_type IS NULL THEN 'Not Assigned' ELSE d.deal_type END
+      NOT IN ('Partner-Led SMB')
+  AND toInt64(d.deal_id) IN (
+      SELECT DISTINCT toInt64(deal_id_hs)
+      FROM kore_ai_hubspot.gs_deal_ids_hs
+  )
+GROUP BY d.deal_stage
+ORDER BY
+  CASE d.deal_stage
+    WHEN '1% - IQM Scheduled'      THEN 1
+    WHEN '5% - IQM Held'           THEN 2
+    WHEN '10% - Discovery'         THEN 3
+    WHEN '20% - Solution'          THEN 4
+    WHEN '30% - Proof'             THEN 5
+    WHEN '40% - Proposal'          THEN 6
+    WHEN '60% - Price Negotiation' THEN 7
+    WHEN '75% - Contract Review'   THEN 8
+    WHEN '90% - Deal Desk Review'  THEN 9
+    WHEN 'Closed Won'              THEN 10
+    WHEN 'Deal on Hold'            THEN 11
+    WHEN 'Closed Lost'             THEN 12
+    WHEN 'Prospect Disengaged'     THEN 13
+    WHEN "Didn't Qualify"          THEN 14
+    ELSE 99
+  END
+=================================================================
+
  
 =================================================================
 SAMPLE MQL QUERIES
