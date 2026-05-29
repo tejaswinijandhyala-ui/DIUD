@@ -559,6 +559,7 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
             rows = payload
         elif isinstance(payload, dict):
             rows = payload.get("data") or payload.get("rows") or payload.get("result") or payload.get("results")
+            api_columns = payload.get("columns") or payload.get("meta") or payload.get("column_names")
             if rows is None:
                 return json.dumps(payload, indent=2, default=str)[:3000]
         else:
@@ -573,7 +574,10 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
             norm_rows = rows
         else:
             # List-of-lists — use index keys
-            columns = [f"col_{i}" for i in range(len(rows[0]))]
+            if api_columns and len(api_columns) == len(rows[0]):
+                columns = [c["name"] if isinstance(c, dict) else c for c in api_columns]
+            else:
+                columns = [f"col_{i}" for i in range(len(rows[0]))]
             norm_rows = [dict(zip(columns, r)) for r in rows]
 
         total_rows = len(norm_rows)
