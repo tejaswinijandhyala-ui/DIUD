@@ -720,7 +720,7 @@
               <option value="csv">📋 CSV (raw data)</option>
             </select>
           </div>
-          <div class="ep-input-group">
+          <div class="ep-input-group" id="ep-detail-group">
             <div class="ep-label">Detail Level</div>
             <select class="ep-select" id="ep-detail">
               <option value="detailed">Detailed</option>
@@ -1202,10 +1202,47 @@
       return;
     }
 
-    const title    = document.getElementById("ep-title").value.trim() || "Pipeline Intelligence Report";
-    const format   = document.getElementById("ep-format").value;
-    const detail   = document.getElementById("ep-detail").value;
+    const title  = document.getElementById("ep-title").value.trim() || "Pipeline Intelligence Report";
+    const format = document.getElementById("ep-format").value;
+    const detail = document.getElementById("ep-detail").value;
 
+    // ── CSV: skip AI entirely — just confirm row count and show download button ──
+    if (format === "csv") {
+      if (!datasetRows || datasetRows === 0) {
+        showToast("No dataset found. Run a query first, then export.", "error");
+        return;
+      }
+      showPanelState("preview");
+      document.getElementById("ep-preview-content").innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:12px;padding:4px 0;">
+          <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:#E8F5E9;border:1px solid #C8E6C9;border-radius:8px;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.5" style="width:20px;height:20px;flex-shrink:0;">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <span style="color:#1B5E20;font-weight:600;font-size:14px;">
+              ${datasetRows.toLocaleString()} rows ready to export
+            </span>
+          </div>
+          <p style="color:#555;font-size:13px;line-height:1.6;margin:0;">
+            The CSV will contain the raw data with the original column headers from the database — no AI summary or formatting added.
+          </p>
+        </div>`;
+      document.getElementById("ep-preview-meta-text").textContent =
+        `${datasetRows.toLocaleString()} rows · Raw data · No AI summary`;
+      // Show only the CSV download button
+      document.getElementById("ep-dl-pdf").style.display  = "none";
+      document.getElementById("ep-dl-pptx").style.display = "none";
+      const csvBtn = document.getElementById("ep-dl-csv");
+      if (csvBtn) {
+        csvBtn.style.display = "flex";
+        const csvLabel = document.getElementById("ep-csv-label");
+        if (csvLabel) csvLabel.textContent = `Download All ${datasetRows.toLocaleString()} Rows (CSV)`;
+      }
+      showFooter();
+      return;  // do NOT call /export/preview
+    }
+
+    // ── PDF / PPTX: full AI-generated preview ──
     exportBusy = true;
     document.getElementById("ep-generate-btn").disabled = true;
     hideFooter();
@@ -1242,7 +1279,7 @@
         body:    JSON.stringify({
           conversation: history,
           title,
-          export_type:  format === "csv" ? "pdf" : format,  // CSV has no preview; use pdf layout
+          export_type:  format,
           detail_level: detail,
           session_id:   SESSION_ID,
         }),
@@ -1273,19 +1310,11 @@
       showPanelState("preview");
       showFooter();
 
-      // Show correct download buttons
-      const isPDF  = format === "pdf";
-      const isPPTX = format === "pptx";
-      const isCSV  = format === "csv";
-      document.getElementById("ep-dl-pdf").style.display  = isPDF  ? "flex" : "none";
-      document.getElementById("ep-dl-pptx").style.display = isPPTX ? "flex" : "none";
-      // CSV button: show when format is CSV and there's data in the session store
+      // Show correct download buttons (never show CSV here — CSV exits early above)
+      document.getElementById("ep-dl-pdf").style.display  = format === "pdf"  ? "flex" : "none";
+      document.getElementById("ep-dl-pptx").style.display = format === "pptx" ? "flex" : "none";
       const csvBtn = document.getElementById("ep-dl-csv");
-      if (csvBtn) {
-        csvBtn.style.display = (isCSV || datasetRows > 0) ? "flex" : "none";
-        const csvLabel = document.getElementById("ep-csv-label");
-        if (csvLabel && datasetRows > 0) csvLabel.textContent = `Download All ${datasetRows.toLocaleString()} Rows (CSV)`;
-      }
+      if (csvBtn) csvBtn.style.display = "none";
 
     } catch (err) {
       showPanelState("empty");
@@ -1296,6 +1325,14 @@
       document.getElementById("ep-generate-btn").disabled = false;
     }
   }
+
+  // Hide Detail Level when CSV is selected (it's irrelevant for raw data export)
+  document.getElementById("ep-format").addEventListener("change", function () {
+    const isCsv = this.value === "csv";
+    document.getElementById("ep-detail-group").style.display = isCsv ? "none" : "";
+    // Reset panel so stale PDF/PPTX preview doesn't persist when switching to CSV
+    if (isCsv) { showPanelState("empty"); hideFooter(); previewContent = null; }
+  });
 
   function setProgress(pct, label) {
     document.getElementById("ep-progress-fill").style.width = pct + "%";
