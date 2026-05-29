@@ -1326,12 +1326,22 @@
     }
   }
 
-  // Hide Detail Level when CSV is selected (it's irrelevant for raw data export)
+  // Hide Detail Level when CSV is selected; reset panel on any format switch
   document.getElementById("ep-format").addEventListener("change", function () {
     const isCsv = this.value === "csv";
     document.getElementById("ep-detail-group").style.display = isCsv ? "none" : "";
-    // Reset panel so stale PDF/PPTX preview doesn't persist when switching to CSV
-    if (isCsv) { showPanelState("empty"); hideFooter(); previewContent = null; }
+
+    // Always reset the panel when format changes — stale preview/buttons from the
+    // previous format are wrong for the newly selected format
+    showPanelState("empty");
+    hideFooter();
+    previewContent = null;
+
+    // Hide all download buttons so nothing leaks across format switches
+    document.getElementById("ep-dl-pdf").style.display  = "none";
+    document.getElementById("ep-dl-pptx").style.display = "none";
+    const csvBtn = document.getElementById("ep-dl-csv");
+    if (csvBtn) csvBtn.style.display = "none";
   });
 
   function setProgress(pct, label) {
