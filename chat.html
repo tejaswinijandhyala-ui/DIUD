@@ -267,6 +267,26 @@
     }
     @keyframes pulse-btn { to { opacity: .4; } }
 
+    /* ── Copy button beneath assistant bubbles ──────────────────────────── */
+    .msg-actions {
+      display: flex; align-items: center; gap: 4px;
+      opacity: 0; transition: opacity .15s;
+      padding: 0 2px;
+    }
+    .msg.assistant:hover .msg-actions { opacity: 1; }
+    .msg-copy-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 9px; border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--card); color: var(--txt-dim);
+      font-size: 11.5px; font-weight: 500; cursor: pointer;
+      font-family: inherit; transition: all .15s;
+      line-height: 1;
+    }
+    .msg-copy-btn:hover { background: var(--blue-lt); color: var(--accent); border-color: var(--accent); }
+    .msg-copy-btn.copied { color: #16a34a; border-color: #bbf7d0; background: #f0fdf4; }
+    .msg-copy-btn svg { width: 12px; height: 12px; flex-shrink: 0; }
+
     /* Markdown inside assistant bubbles */
     .chat-md { overflow-x: auto; }
     .chat-md p  { margin-bottom: 8px; }
@@ -1060,7 +1080,7 @@
   /* ======================================================================
      BUBBLE HELPERS
      ====================================================================== */
-  /* Normal assistant bubble — no retry button */
+  /* Normal assistant bubble — with copy button */
   function appendBubble(role, content) {
     const msgs = document.getElementById("messages");
     const now  = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -1070,12 +1090,61 @@
     let body;
     if (role === "assistant") {
       body = `<div class="msg-bubble chat-md">${marked.parse(content)}</div>
+              <div class="msg-actions">
+                <button class="msg-copy-btn" title="Copy response">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                  </svg>
+                  Copy
+                </button>
+              </div>
               <div class="msg-time">${now}</div>`;
     } else {
       body = `<div class="msg-bubble">${escapeHtml(content)}</div>
               <div class="msg-time">${now}</div>`;
     }
     div.innerHTML = `<div class="msg-avatar">${initials}</div><div class="msg-body">${body}</div>`;
+
+    // Wire up copy button
+    if (role === "assistant") {
+      const btn = div.querySelector(".msg-copy-btn");
+      btn.addEventListener("click", () => {
+        navigator.clipboard.writeText(content).then(() => {
+          btn.classList.add("copied");
+          btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>Copied!`;
+          setTimeout(() => {
+            btn.classList.remove("copied");
+            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>Copy`;
+          }, 2000);
+        }).catch(() => {
+          // Fallback for browsers that block clipboard without HTTPS
+          const ta = document.createElement("textarea");
+          ta.value = content;
+          ta.style.position = "fixed"; ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select(); document.execCommand("copy");
+          document.body.removeChild(ta);
+          btn.classList.add("copied");
+          btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>Copied!`;
+          setTimeout(() => {
+            btn.classList.remove("copied");
+            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>Copy`;
+          }, 2000);
+        });
+      });
+    }
+
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
   }
