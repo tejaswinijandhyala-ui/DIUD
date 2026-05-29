@@ -593,7 +593,7 @@
 <!-- ── Login Overlay ──────────────────────────────────────────────────────── -->
 <div id="login-overlay">
   <div class="login-card">
-    <img src="logo.png" alt="DIUD Logo" class="login-logo">
+    <img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD Logo" class="login-logo">
     <h1>Welcome to <span>DIUD</span><br>Data Intelligence Agent</h1>
     <div class="login-fields">
       <div class="login-field">
@@ -616,7 +616,7 @@
 <header class="topbar">
   <div class="topbar-brand">
     <div class="topbar-logo-box">
-      <img src="logo.png" alt="DIUD Logo" class="topbar-logo-img">
+      <img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD Logo" class="topbar-logo-img">
     </div>
     <div>
       <div class="topbar-title">Decision Intelligence Using Data (DIUD)</div>
@@ -1088,7 +1088,7 @@
     const now  = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const div  = document.createElement("div");
     div.className = `msg ${role}`;
-    const diudAvatar = `<svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;"><rect width="36" height="36" rx="9" fill="#0F1F3D"/><path d="M10 12 L10 24 L16 24 C20.4 24 23 21.5 23 18 C23 14.5 20.4 12 16 12 Z" fill="#4A9EFF"/><circle cx="26" cy="18" r="3" fill="#4A9EFF"/></svg>`;
+    const diudAvatar = `<img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD" style="width:100%;height:100%;object-fit:contain;border-radius:8px;">`;
     const initials = role === "user" ? "YOU" : diudAvatar;
     let body;
     if (role === "assistant") {
@@ -1164,7 +1164,7 @@
     div.dataset.retryMsg        = retryContext.message        || "";
     div.dataset.retryHistoryLen = retryContext.historyLen     || 0;
     div.innerHTML = `
-      <div class="msg-avatar"><svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;"><rect width="36" height="36" rx="9" fill="#0F1F3D"/><path d="M10 12 L10 24 L16 24 C20.4 24 23 21.5 23 18 C23 14.5 20.4 12 16 12 Z" fill="#4A9EFF"/><circle cx="26" cy="18" r="3" fill="#4A9EFF"/></svg></div>
+      <div class="msg-avatar"><img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD" style="width:100%;height:100%;object-fit:contain;border-radius:8px;"></div>
       <div class="msg-body">
         <div class="msg-error-wrap">
           <div class="msg-error-bubble">⚠️ ${escapeHtml(errorText)}</div>
@@ -1196,7 +1196,7 @@
     const div  = document.createElement("div");
     div.id = id; div.className = "msg assistant";
     div.innerHTML = `
-      <div class="msg-avatar"><svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:100%;"><rect width="36" height="36" rx="9" fill="#0F1F3D"/><path d="M10 12 L10 24 L16 24 C20.4 24 23 21.5 23 18 C23 14.5 20.4 12 16 12 Z" fill="#4A9EFF"/><circle cx="26" cy="18" r="3" fill="#4A9EFF"/></svg></div>
+      <div class="msg-avatar"><img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD" style="width:100%;height:100%;object-fit:contain;border-radius:8px;"></div>
       <div class="msg-body">
         <div class="msg-bubble">
           <div class="typing-indicator">
