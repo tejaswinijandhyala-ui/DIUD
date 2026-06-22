@@ -458,92 +458,6 @@ Materialized view of go_calls. Identical columns to go_calls.
 Use for fast aggregations (call volume, duration, recency per rep).
 Join key: primaryUserId → go_users.id
 
-── TABLE G3: hs_analytics.go_extensiveCalls (FINAL) ─────────────
-AI-enriched call data. One row per call participant (Kore employee).
-id                              — call ID → join to go_calls.id
-startdatetime                   — call start (String)
-updatedAt                       — last updated (String)
-
-IDENTITY / PARTICIPANT:
-kore_employee_emailAddress      — Kore rep's email → join to deals.deal_owner email
-kore_employee_userId            — Gong user ID → join to go_users.id
-kore_employee_title             — rep's title
-number_of_participants          — total participants on call
-
-CALL CONTENT (AI-generated):
-content_brief                   — AI summary of the full call
-content_keyPoints               — key discussion points
-content_highlight_Next_steps    — agreed next steps from the call
-content_callOutcome_name        — call outcome label (e.g. "Follow-up scheduled")
-content_callOutcome_category    — outcome category
-
-TOPIC DURATIONS (seconds spent on each topic):
-content_topic_Call_Setup_duration
-content_topic_Moving_Forward_duration
-content_topic_Next_Steps_duration
-content_topic_Pricing_duration
-content_topic_Small_Talk_duration
-content_topic_Wrap-Up_duration
-
-INTERACTION STATS:
-interaction_stat_Talk_Ratio         — rep talk ratio (e.g. "0.65")
-interaction_stat_Interactivity      — engagement score
-interaction_stat_Patience           — listener patience score
-interaction_stat_Longest_Monologue  — longest uninterrupted speech (seconds)
-interaction_stat_Longest_Customer_Story — longest customer story (seconds)
-interaction_questions_companyCount  — questions asked by Kore rep
-interaction_questions_nonCompanyCount — questions asked by customer
-
-VIDEO STATS:
-interaction_video_Webcam / Browser / Presentation / WebcamPrimaryUser
-
-TRACKER COUNTS (times keyword group mentioned):
-content_tracker_Competitors_count          — competitor mentions
-content_tracker_Budget_count               — budget mentions
-content_tracker_Pricing_(tracker)_count    — pricing discussion
-content_tracker_Next_steps_count           — next steps mentions
-content_tracker_Objections_(tracker)_count — objections raised
-content_tracker_Timeline_(beta)_count      — timeline mentions
-content_tracker_Decision_makers_(beta)_count
-content_tracker_Decision_process_(tracker)_count
-content_tracker_Discount_(tracker)_count
-content_tracker_Use_cases_count
-content_tracker_Product_feedback_count
-content_tracker_Business_goals_(tracker)_count
-content_tracker_Hyperscaler_count
-content_tracker_Budget_(tracker)_count
-content_tracker_Quantities_and_Volumes_count
--- Industry-specific trackers (HR, Healthcare, IT, Banking, Retail, Service, Work, Recruiting):
-content_tracker_Application-Specific_(HR)_count
-content_tracker_Application-Specific_(Healthcare)_count
-content_tracker_Application-Specific_(IT)_count
-content_tracker_Application-Specific_(Process)_count
-content_tracker_Application-Specific_(Retail)_count
-content_tracker_Application-Specific_(Service)_count
-content_tracker_Application-Specific_(Work)_count
-content_tracker_Application_Specific_(Banking)_count
-content_tracker_Customer_Service_Operations_(Banking)_count
-content_tracker_Customer_Service_Operations_(Healthcare)_count
-content_tracker_Customer_Service_Operations_(IT)_count
-content_tracker_Customer_Service_Operations_(Recruiting)_count
-content_tracker_Customer_Service_Operations_(Retail)_count
-content_tracker_Customer_Service_Operations_(Service)_count
-content_tracker_Employee_Experience_(IT)_count
-content_tracker_Employee_Experience_Question_(HR)_count
-content_tracker_Employee_Experience_Vision_Question_(Work)_count
-content_tracker_Recruiter_Productivity_Question_(Recruiting)_count
-content_tracker_Process_Automation_Question_count
-
-CALL OUTLINE:
-outline_sections    — section titles from Gong's call outline
-outline_item_texts  — detailed outline item text
-
-METADATA (mirrors go_calls columns, prefixed metaData_):
-metaData_title, metaData_duration, metaData_direction,
-metaData_started, metaData_scheduled, metaData_url,
-metaData_media, metaData_language, metaData_primaryUserId,
-metaData_purpose, metaData_sdrDisposition, metaData_scope,
-metaData_workspaceId, metaData_isPrivate, metaData_customData
 
 ── TABLE G4: hs_analytics.go_scorecards (FINAL) ─────────────────
 Scorecard question definitions (NOT per-call scores — this is the
@@ -594,9 +508,6 @@ Use for fast user lookups and manager hierarchy joins.
 
 GONG JOIN KEYS (CRITICAL):
 - go_calls.primaryUserId          → go_users.id
-- go_extensiveCalls.kore_employee_userId → go_users.id
-- go_extensiveCalls.kore_employee_emailAddress → deals.deal_owner (email match)
-- go_extensiveCalls.id            → go_calls.id  (same call)
 - go_users.managerId              → go_users.id  (manager hierarchy)
 
 GONG QUERY PATTERNS:
@@ -985,7 +896,7 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
 
     print(f"🔍 SQL (session={session_id}) → {sql[:200]}")
 
-    GONG_TABLES   = ["go_extensiveCalls", "go_calls", "go_calls_mv", "go_users", "go_scorecards"]
+    GONG_TABLES   = ["go_calls", "go_calls_mv", "go_users", "go_scorecards"]
     is_gong_query = any(t in sql for t in GONG_TABLES)
     MAX_RETRIES   = 3 if is_gong_query else 1   # retry Gong queries up to 3× on transient 500s
     RETRY_DELAYS  = [2, 5]                        # seconds between attempts
@@ -1023,7 +934,7 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
             if is_gong_query:
                 return (
                     f"DATABASE ERROR: HTTP 500 on Gong table query (failed after {MAX_RETRIES} attempts). "
-                    f"The Gong tables (go_extensiveCalls, go_calls, go_calls_mv) appear to be unavailable — "
+                    f"The Gong tables (go_calls, go_calls_mv) appear to be unavailable — "
                     f"this is a server-side infrastructure issue, not a query logic error. "
                     f"Check /debug/db to confirm Gong table connectivity. "
                     f"Raw error: {last_error[:300]}"
