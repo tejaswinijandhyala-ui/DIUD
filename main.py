@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import time
 import traceback
 import uuid
 from datetime import date, datetime
@@ -984,13 +985,29 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
 
     print(f"🔍 SQL (session={session_id}) → {sql[:200]}")
 
-    try:
-        resp = httpx.post(
-            f"{base_url}/query",
-            headers=_auth_headers(),
-            json={"query": sql},
-            timeout=60,
-        )
+    GONG_TABLES   = ["go_extensiveCalls", "go_calls", "go_calls_mv", "go_users", "go_scorecards"]
+    is_gong_query = any(t in sql for t in GONG_TABLES)
+    MAX_RETRIES   = 3 if is_gong_query else 1   # retry Gong queries up to 3× on transient 500s
+    RETRY_DELAYS  = [2, 5]                        # seconds between attempts
+
+    last_error: str = ""
+    resp = None
+    for attempt in range(MAX_RETRIES):
+        if attempt > 0:
+            delay = RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
+            print(f"   ⏳ Retry {attempt}/{MAX_RETRIES - 1} after {delay}s (Gong 500 backoff)…")
+            time.sleep(delay)
+        try:
+            resp = httpx.post(
+                f"{base_url}/query",
+                headers=_auth_headers(),
+                json={"query": sql},
+                timeout=60,
+            )
+        except httpx.ConnectError as e:
+            return f"DATABASE CONNECTION FAILED: Could not reach {base_url}. {e}"
+        except httpx.TimeoutException:
+            return "DATABASE ERROR: Query timed out after 60 s."
 
         if resp.status_code == 401:
             return "DATABASE CONNECTION FAILED: 401 Unauthorized."
@@ -999,19 +1016,27 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
         if resp.status_code == 422:
             return f"ERROR: Proxy rejected query (422): {resp.text[:400]}"
         if resp.status_code == 500:
-            gong_tables = ["go_extensiveCalls", "go_calls", "go_calls_mv", "go_users", "go_scorecards"]
-            is_gong = any(t in sql for t in gong_tables)
-            if is_gong:
+            last_error = resp.text[:400]
+            print(f"   ❌ HTTP 500 on attempt {attempt + 1}/{MAX_RETRIES}: {last_error[:120]}")
+            if attempt < MAX_RETRIES - 1:
+                continue   # retry
+            if is_gong_query:
                 return (
-                    f"DATABASE ERROR: HTTP 500 on Gong table query. "
+                    f"DATABASE ERROR: HTTP 500 on Gong table query (failed after {MAX_RETRIES} attempts). "
                     f"The Gong tables (go_extensiveCalls, go_calls, go_calls_mv) appear to be unavailable — "
                     f"this is a server-side infrastructure issue, not a query logic error. "
-                    f"Raw error: {resp.text[:300]}"
+                    f"Check /debug/db to confirm Gong table connectivity. "
+                    f"Raw error: {last_error[:300]}"
                 )
-            return f"DATABASE ERROR: HTTP 500: {resp.text[:400]}"
+            return f"DATABASE ERROR: HTTP 500 (failed after {MAX_RETRIES} attempts): {last_error}"
         if resp.status_code != 200:
             return f"DATABASE ERROR: HTTP {resp.status_code} — {resp.text[:300]}"
+        break  # success — exit retry loop
 
+    if resp is None:
+        return "DATABASE CONNECTION FAILED: No response received."
+
+    try:
         payload = resp.json()
 
         if isinstance(payload, list):
@@ -1066,10 +1091,6 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
         print(f"   ✅ {total_rows} rows returned. Session store updated.")
         return result
 
-    except httpx.ConnectError as e:
-        return f"DATABASE CONNECTION FAILED: Could not reach {base_url}. {e}"
-    except httpx.TimeoutException:
-        return "DATABASE CONNECTION FAILED: Query timed out after 60 seconds."
     except Exception as exc:
         traceback.print_exc()
         return f"DATABASE CONNECTION FAILED: {type(exc).__name__}: {exc}"
