@@ -268,13 +268,23 @@ the live ClickHouse or Web data. How may I help you?"
 No bullet points, no extras. This overrides everything.
 
 =================================================================
-FUNNEL VISUALIZATION RULE
+VISUALIZATION RULES — READ CAREFULLY
 =================================================================
-When the user asks about funnel conversion, stage progression, pipeline stages,
-deal conversion rates, win rates, or any stage-to-stage flow — ALWAYS include
-a special JSON block at the END of your response for rendering a visual funnel.
+Only emit a visualization block when it genuinely adds value.
+DO NOT emit any viz block for: greetings, simple lookups, deal lists,
+export requests, schema questions, or any answer that is already clear
+as a table or prose.
 
-Format it EXACTLY like this (after all prose and tables):
+── RULE 1: FUNNEL CHART ────────────────────────────────────────
+Emit a ```funnel-data block ONLY when the user EXPLICITLY asks for:
+  - "funnel", "conversion funnel", "stage conversion", "stage drop-off",
+    "how many deals progress", "stage-to-stage", "pipeline funnel"
+  - e.g. "show me the funnel", "what's our stage drop-off", "funnel analysis"
+
+DO NOT emit funnel-data for general pipeline questions, deal counts,
+AE performance, regional breakdowns, win rate, or any other query.
+
+Format (place AFTER all prose and tables):
 ```funnel-data
 {{
   "title": "FY27 Pipeline Conversion Funnel",
@@ -290,18 +300,39 @@ Format it EXACTLY like this (after all prose and tables):
   "metric": "count"
 }}
 ```
-Replace the numbers with ACTUAL query results. Use real data, not placeholders.
-The UI will render this as a beautiful interactive funnel chart automatically.
+Stage colors: 5% IQM #1565C0 · 20% Solution #1976D2 · 30% Proof #1E88E5
+              40% Proposal #2196F3 · 60% Negotiation #42A5F5 · 75% Contract #64B5F6
+              Closed Won #4CAF50 · Closed Lost #EF5350
+IMPORTANT: Use REAL query result data, never placeholders.
 
-Use these stage colors for consistency:
-- 5% IQM:           #1565C0
-- 20% Solution:     #1976D2
-- 30% Proof:        #1E88E5
-- 40% Proposal:     #2196F3
-- 60% Negotiation:  #42A5F5
-- 75% Contract:     #64B5F6
-- Closed Won:       #4CAF50
-- Closed Lost:      #EF5350
+── RULE 2: BAR CHART ────────────────────────────────────────────
+Emit a ```chart-data block ONLY when the user asks for:
+  - Regional breakdown, AE comparison, industry breakdown,
+    pipeline by source, top N rankings — any categorical comparison
+  - e.g. "pipeline by region", "top 5 AEs by pipeline", "win rate by source"
+
+DO NOT emit chart-data for funnels, deal lists, KPI lookups, or time series.
+
+Format (place AFTER all prose and tables):
+```chart-data
+{{
+  "type": "bar",
+  "title": "Pipeline by Region ($M)",
+  "data": [
+    {{"label": "North America", "value": 24.5, "color": "#1565C0"}},
+    {{"label": "EMEA", "value": 18.2, "color": "#1E88E5"}},
+    {{"label": "ISEA", "value": 9.1, "color": "#42A5F5"}},
+    {{"label": "JAPAC", "value": 4.3, "color": "#64B5F6"}}
+  ],
+  "unit": "$M"
+}}
+```
+IMPORTANT: Use REAL query result data, never placeholders.
+
+── RULE 3: NO VIZ ────────────────────────────────────────────────
+For everything else (deal lists, single KPIs, text answers, AE scorecard
+tables, export requests, win/loss narratives) — emit NO viz block at all.
+A markdown table is sufficient.
 
 =================================================================
 EXPORT INTENT RULE
@@ -316,13 +347,24 @@ Then on the next line, write a friendly confirmation message.
 Do NOT re-run the query. Do NOT ask which format.
 
 =================================================================
-CLICKHOUSE DIRECT ACCESS
+CLICKHOUSE DIRECT ACCESS — MANDATORY
 =================================================================
-You have a tool called query_clickhouse.
-Use it for any question about pipeline deals, AEs, regions, industries,
-stages, win/loss, competitors, conversions, or any metric not in context.
+You MUST call query_clickhouse for ANY question involving:
+- Deal counts, pipeline values, deal lists, AE performance
+- Stage/funnel data, win/loss rates, regions, industries
+- Attainment, targets, coverage, conversion rates
+- Any specific number or metric about the business
 
-If the tool returns DATABASE CONNECTION FAILED, relay it to the user.
+NEVER answer with assumed, estimated, or made-up numbers.
+If you don't have query results, say "Let me check the database"
+and call the tool. No exceptions.
+
+If the tool returns DATABASE CONNECTION FAILED or ERROR:,
+relay the exact error to the user — do not guess at the answer.
+
+HALLUCINATION CHECK: Before stating any number (deal count, $M value,
+%, AE name, stage count), ask yourself: "Did I get this from a
+query result in this conversation?" If no → call the tool first.
 
 =================================================================
 DUPLICATE RECORD EXCLUSION — ALWAYS APPLY
@@ -688,6 +730,31 @@ def _resolve_model(model_hint: Optional[str]) -> str:
     return _DEFAULT_MODEL
 
 
+_DATA_QUESTION_PATTERNS = re.compile(
+    r'\b(how many|how much|what is|what are|show me|list|give me|'
+    r'top \d|pipeline|deals?|stage|funnel|region|AE|attain|win rate|'
+    r'closed|open|stall|value|amount|quota|target|coverage|'
+    r'breakdown|summary|compare|which|who has|count|total|'
+    r'conversion|drop.?off|revenue|forecast)\b',
+    re.IGNORECASE,
+)
+
+_GREETING_PATTERNS = re.compile(
+    r'^(hi|hey|hello|good morning|good afternoon|good evening|'
+    r'thanks|thank you|ok|okay|got it|sure|sounds good)[!.,\s]*$',
+    re.IGNORECASE,
+)
+
+def _is_data_question(message: str) -> bool:
+    """True when the last user message is a data/analytics question."""
+    msg = message.strip()
+    if _GREETING_PATTERNS.match(msg):
+        return False
+    if len(msg) < 15:                     # very short — probably not a query
+        return False
+    return bool(_DATA_QUESTION_PATTERNS.search(msg))
+
+
 def _call_claude(messages: list, max_tokens: int = 8192,
                  session_id: Optional[str] = None,
                  model_hint: Optional[str] = None) -> str:
@@ -710,11 +777,21 @@ def _call_claude(messages: list, max_tokens: int = 8192,
         else:
             safe_messages.append({"role": m["role"], "content": content})
 
+    # Determine whether to force tool use on first turn
+    last_user_msg = next(
+        (m["content"] for m in reversed(safe_messages) if m["role"] == "user"
+         and isinstance(m["content"], str)), ""
+    )
+    force_tool = _is_data_question(last_user_msg)
+    tool_choice = {"type": "any"} if force_tool else {"type": "auto"}
+    print(f"   tool_choice={tool_choice['type']} (data_question={force_tool})")
+
     response = _ai_client.messages.create(
         model=model,
         system=_SYSTEM_PROMPT,
         messages=safe_messages,
         tools=[_QUERY_TOOL],
+        tool_choice=tool_choice,
         temperature=0,
         max_tokens=max_tokens,
     )
@@ -748,6 +825,7 @@ def _call_claude(messages: list, max_tokens: int = 8192,
             system=_SYSTEM_PROMPT,
             messages=safe_messages,
             tools=[_QUERY_TOOL],
+            tool_choice={"type": "auto"},   # subsequent rounds: auto
             temperature=0,
             max_tokens=max_tokens,
         )
@@ -825,8 +903,8 @@ def chat(payload: ChatRequest):
     has_dataset = payload.session_id is not None and payload.session_id in _SESSION_STORE
     stored = _SESSION_STORE.get(payload.session_id) if payload.session_id else None
 
-    # Detect funnel data block
     funnel_data = _extract_funnel_data(reply)
+    chart_data  = _extract_chart_data(reply)
 
     return {
         "reply":         reply,
@@ -834,12 +912,24 @@ def chat(payload: ChatRequest):
         "dataset_rows":  stored.total_rows if stored else 0,
         "export_intent": "__EXPORT_INTENT__" in reply,
         "funnel_data":   funnel_data,
+        "chart_data":    chart_data,
     }
 
 
 def _extract_funnel_data(reply: str) -> Optional[dict]:
     """Extract funnel-data JSON block from reply if present."""
     match = re.search(r'```funnel-data\s*\n(.*?)\n```', reply, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except Exception:
+            return None
+    return None
+
+
+def _extract_chart_data(reply: str) -> Optional[dict]:
+    """Extract chart-data JSON block from reply if present."""
+    match = re.search(r'```chart-data\s*\n(.*?)\n```', reply, re.DOTALL)
     if match:
         try:
             return json.loads(match.group(1))
@@ -886,6 +976,7 @@ def chat_retry(payload: RetryRequest):
     has_dataset = payload.session_id is not None and payload.session_id in _SESSION_STORE
     stored      = _SESSION_STORE.get(payload.session_id) if payload.session_id else None
     funnel_data = _extract_funnel_data(reply)
+    chart_data  = _extract_chart_data(reply)
 
     return {
         "reply":         reply,
@@ -893,6 +984,7 @@ def chat_retry(payload: RetryRequest):
         "dataset_rows":  stored.total_rows if stored else 0,
         "export_intent": "__EXPORT_INTENT__" in reply,
         "funnel_data":   funnel_data,
+        "chart_data":    chart_data,
         "retried":       True,
     }
 
