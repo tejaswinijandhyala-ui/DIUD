@@ -325,48 +325,77 @@
     @keyframes bounce { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
 
     /* ── Funnel chart ───────────────────────────────────────────────────── */
+    /* ── Funnel chart — enhanced SVG version ─────────────────────────── */
     .funnel-wrap {
       background: var(--card); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 18px 20px 20px;
-      margin-top: 4px; max-width: 860px; width: 100%;
-      box-shadow: 0 1px 4px rgba(0,0,0,.06);
+      border-radius: var(--radius); padding: 20px 24px 24px;
+      margin-top: 4px; max-width: 900px; width: 100%;
+      box-shadow: 0 2px 12px rgba(13,27,62,.07);
+    }
+    .funnel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 18px;
     }
     .funnel-title {
-      font-size: 13px; font-weight: 700; color: var(--navy);
-      margin-bottom: 14px; display: flex; align-items: center; gap: 8px;
+      font-size: 13.5px; font-weight: 700; color: var(--navy);
+      display: flex; align-items: center; gap: 8px;
     }
-    .funnel-title svg { width: 15px; height: 15px; color: var(--accent); }
-    .funnel-chart { display: flex; flex-direction: column; align-items: center; gap: 0; }
-    .funnel-stage-row {
-      display: flex; align-items: center; width: 100%; gap: 14px;
+    .funnel-title svg { width: 16px; height: 16px; color: var(--accent); }
+    .funnel-toggle-group {
+      display: flex; gap: 4px; background: var(--bg);
+      border-radius: 8px; padding: 3px;
     }
-    .funnel-shape-col { flex: 0 0 auto; display: flex; justify-content: center; width: 280px; }
-    .funnel-trapezoid {
-      height: 46px; display: flex; align-items: center; justify-content: center;
-      color: white; font-size: 12.5px; font-weight: 700;
-      transition: filter .15s; position: relative;
+    .funnel-toggle {
+      padding: 4px 12px; border-radius: 6px; font-size: 11px; font-weight: 600;
+      border: none; cursor: pointer; font-family: inherit;
+      background: transparent; color: var(--txt-dim); transition: all .15s;
     }
-    .funnel-trapezoid:hover { filter: brightness(1.08); }
-    .funnel-info-col {
-      flex: 1; display: flex; align-items: center; justify-content: space-between;
-      font-size: 12px; padding: 4px 0;
+    .funnel-toggle.active {
+      background: white; color: var(--navy);
+      box-shadow: 0 1px 4px rgba(0,0,0,.12);
     }
-    .funnel-stage-name { color: var(--txt-main); font-weight: 600; }
-    .funnel-stage-meta { display: flex; gap: 14px; align-items: center; }
-    .funnel-stage-count { color: var(--txt-mid); }
-    .funnel-stage-pct {
-      font-weight: 700; padding: 2px 9px; border-radius: 20px;
-      font-size: 11.5px; background: var(--blue-lt); color: var(--blue);
-      min-width: 48px; text-align: center;
+    .funnel-body { display: flex; gap: 28px; align-items: flex-start; }
+    .funnel-svg-col { flex: 0 0 auto; }
+    .funnel-svg-col svg { display: block; overflow: visible; }
+    .funnel-details-col {
+      flex: 1; display: flex; flex-direction: column; gap: 0;
+      padding-top: 4px;
     }
-    .funnel-connector {
-      height: 14px; display: flex; align-items: center; justify-content: center; width: 280px;
+    .funnel-row-detail {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 10px; border-radius: 8px;
+      transition: background .12s; cursor: default;
     }
-    .funnel-connector svg { width: 14px; height: 14px; color: var(--txt-dim); }
-    .funnel-dropoff {
-      font-size: 10.5px; color: var(--red); font-weight: 600;
-      display: flex; align-items: center; gap: 3px;
+    .funnel-row-detail:hover { background: var(--bg); }
+    .funnel-row-swatch {
+      width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0;
     }
+    .funnel-row-name {
+      flex: 1; font-size: 12.5px; font-weight: 600; color: var(--txt-main);
+    }
+    .funnel-row-count {
+      font-size: 12px; color: var(--txt-mid); min-width: 70px; text-align: right;
+    }
+    .funnel-row-pct {
+      font-size: 11px; font-weight: 700; padding: 2px 8px;
+      border-radius: 20px; min-width: 52px; text-align: center;
+    }
+    .funnel-row-conv {
+      font-size: 10.5px; color: var(--txt-dim); min-width: 60px; text-align: right;
+    }
+    .funnel-row-conv.drop { color: var(--red); font-weight: 600; }
+    .funnel-row-conv.first { color: var(--txt-dim); }
+    .funnel-summary {
+      margin-top: 14px; padding-top: 12px;
+      border-top: 1px solid var(--border);
+      display: flex; gap: 20px; flex-wrap: wrap;
+    }
+    .funnel-kpi {
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .funnel-kpi-label { font-size: 10px; font-weight: 600; color: var(--txt-dim); text-transform: uppercase; letter-spacing: .4px; }
+    .funnel-kpi-value { font-size: 18px; font-weight: 800; color: var(--navy); }
+    .funnel-kpi-sub   { font-size: 10.5px; color: var(--txt-mid); }
 
     /* ── Input area ──────────────────────────────────────────────────────── */
     .input-area {
@@ -807,7 +836,7 @@
             <button class="model-option" data-model="opus" onclick="selectModel('opus')" type="button">
               <div class="model-option-icon">O</div>
               <div class="model-option-text">
-                <div class="model-option-name">Opus 4.6</div>
+                <div class="model-option-name">Opus 4.7</div>
                 <div class="model-option-desc">Most capable — deeper, more thorough reasoning</div>
               </div>
               <svg class="model-option-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
@@ -995,7 +1024,7 @@
      ====================================================================== */
   const MODEL_INFO = {
     sonnet: { label: "Sonnet 4.6", short: "S" },
-    opus:   { label: "Opus 4.6",   short: "O" },
+    opus:   { label: "Opus 4.7",   short: "O" },
   };
   let selectedModel = "sonnet";  // sent to backend on every /chat and /chat/retry call
 
@@ -1327,81 +1356,270 @@
      a percentage badge, and a drop-off indicator between stages.
      ====================================================================== */
   function buildFunnelChart(funnelData) {
-    const wrap = document.createElement("div");
-    wrap.className = "funnel-wrap";
+    const stages  = funnelData.stages || [];
+    const n       = stages.length;
+    if (!n) return document.createElement("div");
 
-    const stages = funnelData.stages;
-    const metric  = funnelData.metric || "count";
-    const maxWidth = 280;   // widest trapezoid (top stage), px
-    const minWidth = 70;    // narrowest trapezoid (final stage), px
-    const n = stages.length;
+    // ── dimensions ──────────────────────────────────────────────────────────
+    const SVG_W    = 260;
+    const BAR_H    = 38;
+    const GAP      = 6;
+    const MAX_BAR  = SVG_W;
+    const MIN_BAR  = 48;
+    const SVG_H    = n * BAR_H + (n - 1) * GAP;
 
-    // Use `value` (the declared % of top-of-funnel) to size widths proportionally,
-    // falling back to even tapering if value is missing/zero.
-    const maxVal = Math.max(...stages.map(s => (typeof s.value === "number" ? s.value : 0)), 1);
+    // normalise counts & values
+    const maxCount = Math.max(...stages.map(s => Number(s.count) || 0), 1);
+    const topCount  = Number(stages[0]?.count) || 1;
 
-    let rowsHtml = "";
-    stages.forEach((stage, i) => {
-      const ratio = (typeof stage.value === "number" && maxVal > 0) ? (stage.value / maxVal) : (1 - i / Math.max(n - 1, 1));
-      const width = Math.max(minWidth, Math.round(minWidth + ratio * (maxWidth - minWidth)));
-      const inset = Math.round((maxWidth - width) / 2);
-      const color = stage.color || "#1565C0";
-      const count = (typeof stage.count === "number") ? stage.count.toLocaleString() : (stage.count ?? "—");
-      const pct   = (typeof stage.value === "number") ? `${stage.value}%` : "";
+    // unique id so multiple funnels on page don't clash
+    const uid = "fn" + Math.random().toString(36).slice(2, 7);
 
-      // Trapezoid via CSS clip-path: full width at top of stack tapering inward
-      const topInset = inset;
-      const botInset = i === n - 1 ? inset : Math.max(minWidth, Math.round(minWidth + ((typeof stages[i+1]?.value === "number" && maxVal > 0 ? stages[i+1].value / maxVal : 1 - (i+1)/Math.max(n-1,1)) * (maxWidth - minWidth))));
-      const botInsetPx = Math.round((maxWidth - botInset) / 2);
-      const clip = `polygon(${topInset}px 0, ${maxWidth - topInset}px 0, ${maxWidth - botInsetPx}px 100%, ${botInsetPx}px 100%)`;
+    // ── build SVG bars ───────────────────────────────────────────────────────
+    let svgPaths = "";
+    stages.forEach((s, i) => {
+      const cnt   = Number(s.count) || 0;
+      const ratio = cnt / maxCount;
+      const bw    = Math.max(MIN_BAR, Math.round(MIN_BAR + ratio * (MAX_BAR - MIN_BAR)));
+      const bx    = Math.round((SVG_W - bw) / 2);
+      const by    = i * (BAR_H + GAP);
+      const color = s.color || "#1565C0";
+      const label = s.label || `Stage ${i + 1}`;
+      const convPct = i === 0 ? 100 : (topCount > 0 ? Math.round(cnt / topCount * 100) : 0);
 
-      rowsHtml += `
-        <div class="funnel-stage-row">
-          <div class="funnel-shape-col">
-            <div class="funnel-trapezoid" style="width:${maxWidth}px; background:${color}; clip-path:${clip};">
-              ${escapeHtml(stage.label || `Stage ${i + 1}`)}
-            </div>
-          </div>
-          <div class="funnel-info-col">
-            <span class="funnel-stage-name">${escapeHtml(stage.label || `Stage ${i + 1}`)}</span>
-            <span class="funnel-stage-meta">
-              <span class="funnel-stage-count">${count} ${metric === "count" ? "deals" : ""}</span>
-              ${pct ? `<span class="funnel-stage-pct">${pct}</span>` : ""}
-            </span>
-          </div>
-        </div>`;
-
-      // Drop-off connector between this stage and the next
+      // trapezoid: top edge = this bar width, bottom edge = next bar width (or same)
+      let nextBw = bw;
       if (i < n - 1) {
-        const curVal  = typeof stage.value === "number" ? stage.value : null;
-        const nextVal = typeof stages[i + 1].value === "number" ? stages[i + 1].value : null;
-        let dropLabel = "";
-        if (curVal !== null && nextVal !== null && curVal > 0) {
-          const drop = (((curVal - nextVal) / curVal) * 100).toFixed(0);
-          dropLabel = `<span class="funnel-dropoff">▼ ${drop}% drop</span>`;
-        }
-        rowsHtml += `
-          <div class="funnel-stage-row" style="padding:2px 0;">
-            <div class="funnel-connector">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <polyline points="6 9 12 15 18 9"/>
-              </svg>
-            </div>
-            <div class="funnel-info-col" style="justify-content:flex-end;">${dropLabel}</div>
-          </div>`;
+        const nCnt  = Number(stages[i + 1]?.count) || 0;
+        const nRatio = nCnt / maxCount;
+        nextBw = Math.max(MIN_BAR, Math.round(MIN_BAR + nRatio * (MAX_BAR - MIN_BAR)));
       }
+      const tl  = Math.round((SVG_W - bw) / 2);
+      const tr  = SVG_W - tl;
+      const bl  = Math.round((SVG_W - nextBw) / 2);
+      const br  = SVG_W - bl;
+      const ty  = by;
+      const boty = by + BAR_H;
+
+      svgPaths += `
+        <g class="funnel-bar-g" data-idx="${i}">
+          <path d="M${tl},${ty} L${tr},${ty} L${br},${boty} L${bl},${boty} Z"
+                fill="${color}" opacity="0.92" style="cursor:pointer;transition:opacity .15s;">
+            <title>${label}: ${cnt.toLocaleString()} (${convPct}% of top)</title>
+          </path>
+          <text x="${SVG_W/2}" y="${ty + BAR_H/2 + 5}" text-anchor="middle"
+                font-size="11" font-weight="700" fill="white"
+                style="pointer-events:none;font-family:Inter,sans-serif;">
+            ${cnt.toLocaleString()}
+          </text>
+        </g>`;
     });
 
+    // ── detail rows ──────────────────────────────────────────────────────────
+    let detailRows = "";
+    stages.forEach((s, i) => {
+      const cnt      = Number(s.count) || 0;
+      const val      = typeof s.value === "number" ? s.value : null;
+      const color    = s.color || "#1565C0";
+      const label    = s.label || `Stage ${i + 1}`;
+      const convPct  = i === 0 ? 100 : (topCount > 0 ? Math.round(cnt / topCount * 100) : 0);
+      const pctStyle = `background:${color}18; color:${color};`;
+
+      // step-over-step conversion
+      let convLabel = i === 0 ? '<span class="funnel-row-conv first">Top of funnel</span>'
+                               : "";
+      if (i > 0) {
+        const prevCnt = Number(stages[i - 1]?.count) || 0;
+        if (prevCnt > 0) {
+          const stepConv = Math.round(cnt / prevCnt * 100);
+          const drop     = 100 - stepConv;
+          convLabel = `<span class="funnel-row-conv drop">▼ ${drop}% drop</span>`;
+        }
+      }
+
+      detailRows += `
+        <div class="funnel-row-detail" data-funnel-row="${i}">
+          <div class="funnel-row-swatch" style="background:${color};"></div>
+          <span class="funnel-row-name">${escapeHtml(label)}</span>
+          <span class="funnel-row-count">${cnt.toLocaleString()} deals${val !== null ? ` · $${val}M` : ""}</span>
+          <span class="funnel-row-pct" style="${pctStyle}">${convPct}%</span>
+          ${convLabel}
+        </div>`;
+    });
+
+    // ── summary KPIs ─────────────────────────────────────────────────────────
+    const topCnt   = Number(stages[0]?.count) || 0;
+    const botCnt   = Number(stages[n - 1]?.count) || 0;
+    const overallConv = topCnt > 0 ? (botCnt / topCnt * 100).toFixed(1) : "—";
+    const totalVal = stages.reduce((a, s) => a + (typeof s.value === "number" ? s.value : 0), 0);
+
+    const wrap = document.createElement("div");
+    wrap.className = "funnel-wrap";
     wrap.innerHTML = `
-      <div class="funnel-title">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>
-        </svg>
-        ${escapeHtml(funnelData.title || "Conversion Funnel")}
+      <div class="funnel-header">
+        <div class="funnel-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>
+          </svg>
+          ${escapeHtml(funnelData.title || "Conversion Funnel")}
+        </div>
+        <div class="funnel-toggle-group" id="${uid}-tg">
+          <button class="funnel-toggle active" onclick="funnelToggle('${uid}','count')">Count</button>
+          <button class="funnel-toggle" onclick="funnelToggle('${uid}','value')">Value ($M)</button>
+        </div>
       </div>
-      <div class="funnel-chart">${rowsHtml}</div>`;
+      <div class="funnel-body">
+        <div class="funnel-svg-col">
+          <svg width="${SVG_W}" height="${SVG_H}" viewBox="0 0 ${SVG_W} ${SVG_H}" id="${uid}-svg">
+            ${svgPaths}
+          </svg>
+        </div>
+        <div class="funnel-details-col" id="${uid}-details">
+          ${detailRows}
+        </div>
+      </div>
+      <div class="funnel-summary">
+        <div class="funnel-kpi">
+          <span class="funnel-kpi-label">Top of Funnel</span>
+          <span class="funnel-kpi-value">${topCnt.toLocaleString()}</span>
+          <span class="funnel-kpi-sub">deals entering</span>
+        </div>
+        <div class="funnel-kpi">
+          <span class="funnel-kpi-label">Overall Conversion</span>
+          <span class="funnel-kpi-value">${overallConv}%</span>
+          <span class="funnel-kpi-sub">top → ${escapeHtml(stages[n-1]?.label || "final stage")}</span>
+        </div>
+        ${totalVal > 0 ? `<div class="funnel-kpi">
+          <span class="funnel-kpi-label">Total Pipeline Value</span>
+          <span class="funnel-kpi-value">$${totalVal.toFixed(1)}M</span>
+          <span class="funnel-kpi-sub">across all stages</span>
+        </div>` : ""}
+        <div class="funnel-kpi">
+          <span class="funnel-kpi-label">Stages Tracked</span>
+          <span class="funnel-kpi-value">${n}</span>
+          <span class="funnel-kpi-sub">in this funnel</span>
+        </div>
+      </div>`;
+
+    // store stages data on element for toggle
+    wrap.__funnelStages = stages;
+    wrap.__funnelUid    = uid;
+
+    // hover highlight sync
+    setTimeout(() => {
+      wrap.querySelectorAll(".funnel-bar-g").forEach((g, i) => {
+        const row = wrap.querySelector(`[data-funnel-row="${i}"]`);
+        g.addEventListener("mouseenter", () => { if (row) row.style.background = "var(--bg)"; });
+        g.addEventListener("mouseleave", () => { if (row) row.style.background = ""; });
+      });
+    }, 0);
 
     return wrap;
+  }
+
+  /* Toggle funnel between count and value ($M) view */
+  function funnelToggle(uid, mode) {
+    const tg      = document.getElementById(uid + "-tg");
+    const svgEl   = document.getElementById(uid + "-svg");
+    const details = document.getElementById(uid + "-details");
+    if (!tg || !svgEl || !details) return;
+
+    tg.querySelectorAll(".funnel-toggle").forEach(btn => {
+      btn.classList.toggle("active", btn.textContent.trim().toLowerCase().startsWith(mode === "count" ? "count" : "value"));
+    });
+
+    // find parent wrap to get stages
+    const wrap   = svgEl.closest(".funnel-wrap");
+    const stages = wrap?.__funnelStages || [];
+    if (!stages.length) return;
+
+    const SVG_W  = 260;
+    const BAR_H  = 38;
+    const GAP    = 6;
+    const MIN_BAR = 48;
+    const n      = stages.length;
+
+    const vals = stages.map(s => mode === "count" ? (Number(s.count) || 0) : (typeof s.value === "number" ? s.value : 0));
+    const maxVal = Math.max(...vals, 1);
+    const topVal = vals[0] || 1;
+
+    // rebuild SVG paths
+    let svgPaths = "";
+    stages.forEach((s, i) => {
+      const v     = vals[i];
+      const ratio = v / maxVal;
+      const bw    = Math.max(MIN_BAR, Math.round(MIN_BAR + ratio * (SVG_W - MIN_BAR)));
+      const by    = i * (BAR_H + GAP);
+      const color = s.color || "#1565C0";
+
+      let nextBw = bw;
+      if (i < n - 1) {
+        const nv     = vals[i + 1];
+        const nratio = nv / maxVal;
+        nextBw = Math.max(MIN_BAR, Math.round(MIN_BAR + nratio * (SVG_W - MIN_BAR)));
+      }
+      const tl   = Math.round((SVG_W - bw) / 2);
+      const tr   = SVG_W - tl;
+      const bl   = Math.round((SVG_W - nextBw) / 2);
+      const br   = SVG_W - bl;
+      const boty = by + BAR_H;
+      const displayVal = mode === "count" ? v.toLocaleString() : (v > 0 ? `$${v}M` : "—");
+      const convPct = i === 0 ? 100 : (topVal > 0 ? Math.round(v / topVal * 100) : 0);
+
+      svgPaths += `
+        <g class="funnel-bar-g" data-idx="${i}">
+          <path d="M${tl},${by} L${tr},${by} L${br},${boty} L${bl},${boty} Z"
+                fill="${color}" opacity="0.92" style="cursor:pointer;transition:opacity .15s;">
+            <title>${escapeHtml(s.label||"")}: ${displayVal} (${convPct}%)</title>
+          </path>
+          <text x="${SVG_W/2}" y="${by + BAR_H/2 + 5}" text-anchor="middle"
+                font-size="11" font-weight="700" fill="white"
+                style="pointer-events:none;font-family:Inter,sans-serif;">
+            ${displayVal}
+          </text>
+        </g>`;
+    });
+    svgEl.innerHTML = svgPaths;
+
+    // rebuild detail rows
+    let detailRows = "";
+    stages.forEach((s, i) => {
+      const v       = vals[i];
+      const color   = s.color || "#1565C0";
+      const label   = s.label || `Stage ${i + 1}`;
+      const convPct = i === 0 ? 100 : (topVal > 0 ? Math.round(v / topVal * 100) : 0);
+      const pctStyle = `background:${color}18; color:${color};`;
+      const displayVal = mode === "count"
+        ? `${v.toLocaleString()} deals`
+        : (v > 0 ? `$${v}M` : "—");
+
+      let convLabel = i === 0 ? '<span class="funnel-row-conv first">Top of funnel</span>' : "";
+      if (i > 0) {
+        const prevV = vals[i - 1];
+        if (prevV > 0) {
+          const stepConv = Math.round(v / prevV * 100);
+          const drop     = 100 - stepConv;
+          convLabel = `<span class="funnel-row-conv drop">▼ ${drop}% drop</span>`;
+        }
+      }
+
+      detailRows += `
+        <div class="funnel-row-detail" data-funnel-row="${i}">
+          <div class="funnel-row-swatch" style="background:${color};"></div>
+          <span class="funnel-row-name">${escapeHtml(label)}</span>
+          <span class="funnel-row-count">${displayVal}</span>
+          <span class="funnel-row-pct" style="${pctStyle}">${convPct}%</span>
+          ${convLabel}
+        </div>`;
+    });
+    details.innerHTML = detailRows;
+
+    // re-attach hover sync
+    svgEl.querySelectorAll(".funnel-bar-g").forEach((g, i) => {
+      const row = details.querySelector(`[data-funnel-row="${i}"]`);
+      g.addEventListener("mouseenter", () => { if (row) row.style.background = "var(--bg)"; });
+      g.addEventListener("mouseleave", () => { if (row) row.style.background = ""; });
+    });
   }
 
   /* Error bubble — shows red styling + Retry button */
