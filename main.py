@@ -453,37 +453,8 @@ scope           — call scope
 calendarEventId — calendar event reference
 clientUniqueId  — external CRM reference
 
-── TABLE G2: hs_analytics.go_calls_mv (FINAL) ───────────────────
-Materialized view of go_calls. Identical columns to go_calls.
-Use for fast aggregations (call volume, duration, recency per rep).
-Join key: primaryUserId → go_users.id
 
-
-── TABLE G4: hs_analytics.go_scorecards (FINAL) ─────────────────
-Scorecard question definitions (NOT per-call scores — this is the
-scorecard template/question registry). One row per question.
-id              — auto-increment row ID (UInt64)
-scorecardId     — scorecard template ID
-scorecardName   — scorecard name (e.g. "Discovery Call QA")
-reviewMethod    — how reviewed (e.g. "manual", "ai")
-workspaceId     — Gong workspace
-questionId      — individual question ID
-questionText    — the question text
-questionType    — question type (e.g. "score", "boolean")
-maxRange        — maximum score value
-minRange        — minimum score value
-isOverall       — 1 if this is the overall score question
-questionRevisionId
-updaterUserId   — who last updated this question
-created / updated / question_created / question_updated
-enabled         — 1 if scorecard is active
-updatedAt       — last sync timestamp (DateTime)
-
-── TABLE G5: hs_analytics.go_scorecards_mv (FINAL) ──────────────
-Materialized view of go_scorecards. Identical columns.
-Use for fast lookups of scorecard structures and question lists.
-
-── TABLE G6: hs_analytics.go_users (FINAL) ──────────────────────
+── TABLE G2: hs_analytics.go_users (FINAL) ──────────────────────
 Gong user registry. One row per user.
 id              — Gong user ID (PK) → join to go_calls.primaryUserId
 emailAddress    — user email → join to deals.deal_owner / hs_analytics.owners.email
@@ -502,9 +473,6 @@ emailsImported / telephonyCallsImported / webConferencesRecorded (UInt8 flags)
 gongConnectEnabled / nonRecordedMeetingsImported
 preventEmailImport / preventWebConferenceRecording
 
-── TABLE G7: hs_analytics.go_users_mv (FINAL) ───────────────────
-Materialized view of go_users. Identical columns.
-Use for fast user lookups and manager hierarchy joins.
 
 GONG JOIN KEYS (CRITICAL):
 - go_calls.primaryUserId          → go_users.id
@@ -896,7 +864,7 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
 
     print(f"🔍 SQL (session={session_id}) → {sql[:200]}")
 
-    GONG_TABLES   = ["go_calls", "go_calls_mv", "go_users", "go_scorecards"]
+    GONG_TABLES   = ["go_calls","go_users"]
     is_gong_query = any(t in sql for t in GONG_TABLES)
     MAX_RETRIES   = 3 if is_gong_query else 1   # retry Gong queries up to 3× on transient 500s
     RETRY_DELAYS  = [2, 5]                        # seconds between attempts
