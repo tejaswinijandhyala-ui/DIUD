@@ -1,3 +1,4 @@
+
 import csv
 import io
 import json
@@ -39,7 +40,7 @@ load_dotenv()
 # =============================================================================
 # FastAPI App
 # =============================================================================
-app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="6.0.0")
+app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="6.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,8 +55,6 @@ app.add_middleware(
 # =============================================================================
 _ai_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-# Available models — selectable from the UI model picker
-# NOTE: these must be valid, currently-available model strings.
 MODELS = {
     "sonnet": "claude-sonnet-4-6",
     "opus":   "claude-opus-4-7",
@@ -196,7 +195,105 @@ def discover_schema() -> str:
 
 
 # =============================================================================
-# System prompt — enhanced for Claude-quality reasoning
+# INTENT CLASSIFIER
+# Maps user messages to one of these intent categories:
+#   greeting       — hi/hello/thanks etc. → standard greeting response
+#   data_query     — needs DB query (pipeline, deals, AEs, metrics…)
+#   export         — export/download previous results
+#   clarification  — follow-up on prior answer (no new query needed usually)
+#   general        — conceptual/how-to question, no DB needed
+# =============================================================================
+
+_INTENT_GREETING = re.compile(
+    r'^(hi|hey|hello|good\s+morning|good\s+afternoon|good\s+evening|'
+    r'thanks|thank\s+you|ok|okay|got\s+it|sure|sounds\s+good|'
+    r'great|awesome|perfect|cool|nice|bye|goodbye|see\s+you)[!.,\s]*$',
+    re.IGNORECASE,
+)
+
+_INTENT_EXPORT = re.compile(
+    r'\b(export|download|csv|pdf|pptx|powerpoint|send\s+me|give\s+me\s+the\s+(file|list|data)|'
+    r'save\s+as|extract\s+the\s+list|get\s+the\s+file)\b',
+    re.IGNORECASE,
+)
+
+# Strong signal: definitely needs a DB query
+_INTENT_DATA_STRONG = re.compile(
+    r'\b(pipeline|deal[s]?|stage|funnel|region|revenue|quota|target|attainment|'
+    r'win\s+rate|conversion|coverage|forecast|closed\s+won|closed\s+lost|'
+    r'deal\s+count|deal\s+value|deal\s+owner|account\s+executive|AE\b|'
+    r'top\s+\d|bottom\s+\d|rank|leaderboard|scorecard|'
+    r'how\s+many\s+deals|how\s+much\s+pipeline|'
+    r'stalled|stale|aging|overdue|'
+    r'fy\d{2}|fy27|fy26|quarter|q[1-4]\b|'
+    r'mql|marketing\s+qualified|lead|contact[s]?|'
+    r'gong|call[s]?\s+(by|per|volume|count|activity)|rep\s+performance|'
+    r'asana|task[s]?|project[s]?|portfolio|'
+    r'churn|renewal|expansion|upsell|nrr|arr|'
+    r'partner|industry|source|channel|'
+    r'north\s+america|emea|isea|japac|apac|'
+    r'dashboard|report|summary|breakdown|analysis|metrics?)\b',
+    re.IGNORECASE,
+)
+
+# Weak signal: question words that suggest data intent when combined with context
+_INTENT_DATA_WEAK = re.compile(
+    r'\b(show|list|give|find|fetch|get|what\s+is|what\s+are|'
+    r'how\s+many|how\s+much|which|who\s+(has|is|are)|'
+    r'count|total|average|sum|compare|versus|vs\.?)\b',
+    re.IGNORECASE,
+)
+
+# General/conceptual — no DB needed
+_INTENT_GENERAL = re.compile(
+    r'\b(what\s+does\s+\w+\s+mean|explain|define|how\s+does\s+\w+\s+work|'
+    r'what\s+is\s+(a|an|the)\s+(pipeline|funnel|mql|arr|nrr|churn)|'
+    r'tell\s+me\s+about|what\s+can\s+you|help\s+me\s+understand|'
+    r'schema|tables?|columns?|database\s+structure)\b',
+    re.IGNORECASE,
+)
+
+
+def classify_intent(message: str, has_prior_data: bool = False) -> str:
+    """
+    Classify the user's message into an intent category.
+    Returns: 'greeting' | 'export' | 'data_query' | 'general'
+    """
+    msg = message.strip()
+
+    # 1. Greeting check (must be ONLY a greeting — short message)
+    if len(msg) < 60 and _INTENT_GREETING.match(msg):
+        return "greeting"
+
+    # 2. Export check
+    if _INTENT_EXPORT.search(msg) and has_prior_data:
+        return "export"
+
+    # 3. Strong data signal → always query
+    if _INTENT_DATA_STRONG.search(msg):
+        return "data_query"
+
+    # 4. Weak data signal + question-like structure → query
+    if _INTENT_DATA_WEAK.search(msg) and len(msg) > 15:
+        # Exclude if it's clearly a meta/conceptual question
+        if not _INTENT_GENERAL.search(msg):
+            return "data_query"
+
+    # 5. General/conceptual question
+    if _INTENT_GENERAL.search(msg):
+        return "general"
+
+    # 6. Default: if it's a meaningful question (> 20 chars), treat as data_query
+    #    This ensures we NEVER assume an answer — we always check the DB
+    if len(msg) > 20 and "?" in msg:
+        return "data_query"
+
+    # 7. Short non-greeting messages — default to general (no DB call)
+    return "general"
+
+
+# =============================================================================
+# System prompt
 # =============================================================================
 def _build_system_prompt() -> str:
     compact_lines = []
@@ -219,6 +316,24 @@ def _build_system_prompt() -> str:
 You are DIUD (Decision Intelligence Using Data) — an elite conversational data analyst and
 business intelligence agent for Kore.ai. You reason like a senior revenue analyst, not
 just a query runner. You think in business outcomes, not just SQL results.
+
+=================================================================
+INTENT AWARENESS — MANDATORY FIRST STEP
+=================================================================
+Before responding, identify what the user is ACTUALLY trying to understand:
+
+INTENT TYPES:
+  GREETING     → User is just saying hi/thanks → respond warmly, no query
+  DATA_QUERY   → User wants a metric, list, count, or analysis → MUST query DB
+  EXPORT       → User wants to download previous results → use __EXPORT_INTENT__
+  GENERAL      → User asks conceptual/how-to question → explain without querying
+
+For DATA_QUERY intents, always:
+1. State what business question you're answering (the intent behind the ask)
+2. Query the DB with precise SQL
+3. Interpret results as a senior analyst would
+4. Highlight anomalies, risks, or opportunities
+5. Suggest a logical next question
 
 =================================================================
 REASONING STYLE — HIGHEST PRIORITY
@@ -280,10 +395,6 @@ as a table or prose.
 Emit a ```funnel-data block ONLY when the user EXPLICITLY asks for:
   - "funnel", "conversion funnel", "stage conversion", "stage drop-off",
     "how many deals progress", "stage-to-stage", "pipeline funnel"
-  - e.g. "show me the funnel", "what's our stage drop-off", "funnel analysis"
-
-DO NOT emit funnel-data for general pipeline questions, deal counts,
-AE performance, regional breakdowns, win rate, or any other query.
 
 Format (place AFTER all prose and tables):
 ```funnel-data
@@ -301,18 +412,12 @@ Format (place AFTER all prose and tables):
   "metric": "count"
 }}
 ```
-Stage colors: 5% IQM #1565C0 · 20% Solution #1976D2 · 30% Proof #1E88E5
-              40% Proposal #2196F3 · 60% Negotiation #42A5F5 · 75% Contract #64B5F6
-              Closed Won #4CAF50 · Closed Lost #EF5350
 IMPORTANT: Use REAL query result data, never placeholders.
 
 ── RULE 2: BAR CHART ────────────────────────────────────────────
 Emit a ```chart-data block ONLY when the user asks for:
   - Regional breakdown, AE comparison, industry breakdown,
     pipeline by source, top N rankings — any categorical comparison
-  - e.g. "pipeline by region", "top 5 AEs by pipeline", "win rate by source"
-
-DO NOT emit chart-data for funnels, deal lists, KPI lookups, or time series.
 
 Format (place AFTER all prose and tables):
 ```chart-data
@@ -333,14 +438,12 @@ IMPORTANT: Use REAL query result data, never placeholders.
 ── RULE 3: NO VIZ ────────────────────────────────────────────────
 For everything else (deal lists, single KPIs, text answers, AE scorecard
 tables, export requests, win/loss narratives) — emit NO viz block at all.
-A markdown table is sufficient.
 
 =================================================================
 EXPORT INTENT RULE
 =================================================================
 When the user asks to export, download, or get a list/CSV/PDF of results
-from a PREVIOUS query (e.g. "give me those deals", "export the list", "download as CSV"),
-respond with this EXACT marker on a line by itself:
+from a PREVIOUS query, respond with this EXACT marker on a line by itself:
 
 __EXPORT_INTENT__
 
@@ -379,6 +482,8 @@ DUPLICATE RECORD EXCLUSION — ALWAYS APPLY
 RESPONSE FORMAT STANDARDS
 =================================================================
 Structure every analytical response like this:
+
+**🎯 Business Intent:** [one line — what decision this analysis supports]
 
 **TL;DR** — One sentence answer to the question (lead with the insight, not the data)
 
@@ -429,396 +534,62 @@ deal_id_hs
 =================================================================
 GONG TABLES  (all in hs_analytics, ALWAYS use FINAL)
 =================================================================
-=================================================================
-GONG TABLES (all in hs_analytics, ALWAYS use FINAL)
-===================================================
-
-Call activity and user information from Gong.
-
 ── TABLE G1: hs_analytics.go_calls (FINAL) ──────────────────────
-
-One row per call.
-
-id              — call ID (PK)
-title           — call title / meeting name
-direction       — Inbound / Outbound
-system          — conferencing system
-duration        — call length in seconds
-started         — call start timestamp
-scheduled       — scheduled meeting timestamp
-url             — Gong recording URL
-meetingUrl      — original meeting URL
-media           — web conference / phone
-language        — call language
-workspaceId     — Gong workspace
-primaryUserId   — Gong user ID
-isPrivate       — private call flag
-updatedAt       — last updated timestamp
-scope           — call scope
-calendarEventId — calendar reference
-clientUniqueId  — external reference
-
-──────────────────────────────────────────────────────────────────
+id, title, direction, system, duration, started, scheduled, url,
+meetingUrl, media, language, workspaceId, primaryUserId, isPrivate,
+updatedAt, scope, calendarEventId, clientUniqueId
 
 ── TABLE G2: hs_analytics.go_users (FINAL) ──────────────────────
+id, emailAddress, firstName, lastName, title, active, managerId,
+created, updatedAt
 
-Gong user registry.
-
-id              — Gong user ID (PK)
-emailAddress    — user email
-firstName       — first name
-lastName        — last name
-title           — job title
-active          — active flag
-managerId       — manager Gong user ID
-created         — user created date
-updatedAt       — last updated timestamp
-
-──────────────────────────────────────────────────────────────────
-
-GONG JOIN KEYS
-
-go_calls.primaryUserId = go_users.id
-
-──────────────────────────────────────────────────────────────────
-
-SUPPORTED GONG ANALYSIS
-
-1. Call volume by rep
-2. Average call duration
-3. Total call duration
-4. Inbound vs outbound calls
-5. Call activity trends
-6. Rep productivity analysis
-7. Manager hierarchy call rollups
-8. Active vs inactive reps
-9. Call distribution by user
-10. Recent call activity
-
-──────────────────────────────────────────────────────────────────
-
-EXAMPLE QUERIES
-
--- Call volume by rep
-
-SELECT
-concat(u.firstName,' ',u.lastName) AS rep_name,
-countDistinct(c.id) AS total_calls
-FROM hs_analytics.go_calls FINAL c
-JOIN hs_analytics.go_users FINAL u
-ON c.primaryUserId = u.id
-GROUP BY rep_name
-ORDER BY total_calls DESC
-
----
-
--- Average call duration by rep
-
-SELECT
-concat(u.firstName,' ',u.lastName) AS rep_name,
-round(avg(c.duration)/60,1) AS avg_duration_minutes
-FROM hs_analytics.go_calls FINAL c
-JOIN hs_analytics.go_users FINAL u
-ON c.primaryUserId = u.id
-GROUP BY rep_name
-ORDER BY avg_duration_minutes DESC
-
----
-
--- Total call time by rep
-
-SELECT
-concat(u.firstName,' ',u.lastName) AS rep_name,
-round(sum(c.duration)/3600,2) AS total_call_hours
-FROM hs_analytics.go_calls FINAL c
-JOIN hs_analytics.go_users FINAL u
-ON c.primaryUserId = u.id
-GROUP BY rep_name
-ORDER BY total_call_hours DESC
-
----
-
--- Calls in the last 30 days
-
-SELECT
-concat(u.firstName,' ',u.lastName) AS rep_name,
-countDistinct(c.id) AS calls_last_30_days
-FROM hs_analytics.go_calls FINAL c
-JOIN hs_analytics.go_users FINAL u
-ON c.primaryUserId = u.id
-WHERE toDate(parseDateTimeBestEffort(c.started))
->= today() - 30
-GROUP BY rep_name
-ORDER BY calls_last_30_days DESC
-
----
-
--- Inbound vs outbound calls
-
-SELECT
-direction,
-countDistinct(id) AS total_calls
-FROM hs_analytics.go_calls FINAL
-GROUP BY direction
-ORDER BY total_calls DESC
-
----
-
--- Call activity by manager
-
-SELECT
-concat(m.firstName,' ',m.lastName) AS manager_name,
-countDistinct(c.id) AS total_calls
-FROM hs_analytics.go_calls FINAL c
-JOIN hs_analytics.go_users FINAL u
-ON c.primaryUserId = u.id
-LEFT JOIN hs_analytics.go_users FINAL m
-ON u.managerId = m.id
-GROUP BY manager_name
-ORDER BY total_calls DESC
-
-──────────────────────────────────────────────────────────────────
-
-GONG ANALYTICAL INTENTS
-
-"call volume"
-"calls by rep"
-"average call duration"
-"total call time"
-"call activity"
-"rep productivity"
-"inbound vs outbound"
-"call trends"
-"manager call rollup"
-"inactive reps"
-
-Only use:
-
-* hs_analytics.go_calls
-* hs_analytics.go_users
-
-Do NOT reference:
-
-* go_extensiveCalls
-* competitor mentions
-* next steps
-* talk ratio
-* pricing trackers
-* objection trackers
-* sentiment analysis
-* call summaries
-
-These tables are not available in the current environment.
-
+GONG JOIN: go_calls.primaryUserId = go_users.id
 
 =================================================================
 ASANA TABLES  (all in hs_analytics, ALWAYS use FINAL)
 =================================================================
-Project and task management data. Projects are the primary entity —
-they represent customer accounts, deals, or internal workstreams.
-Rich custom fields (cf_*) carry business context like ARR, deal stage,
-region, CSM, implementation status, and renewal data.
-
 ── TABLE A1: hs_analytics.asana_tasks (FINAL) ───────────────────
-Task records. One row per task.
-gid             — task ID (PK)
-name            — task title
-assignee_name   — assigned person's name
-assignee_email  — assigned person's email → join to asana_users.email
-parent_task     — parent task gid (if subtask)
-status          — task status
-start_on        — start date (String)
-due_on          — due date (String) — compare with today() for overdue
-completed       — 'true'/'false' (String — use completed = 'true')
-completed_at    — completion timestamp (String)
-created_at / modified_at — timestamps (String)
-tags            — comma-separated tag list
-notes           — task description / body
-followers       — followers list
+gid, name, assignee_name, assignee_email, parent_task, status,
+start_on, due_on, completed (String 'true'/'false'), completed_at,
+created_at, modified_at, tags, notes, followers
 
 ── TABLE A2: hs_analytics.asana_projects (FINAL) ────────────────
-Project records. One row per project. VERY RICH — 200+ columns.
-Core identity:
-gid             — project ID (PK)
-name            — project name (often = customer/account name)
-owner_name / owner_email
-team            — team name this project belongs to
-status          — project status
-start_on / due_on — dates (String)
-created_at / modified_at / archived
-color / notes / members / public
-
-KEY BUSINESS CUSTOM FIELDS (cf_*):
--- Financial:
-cf_arr / cf_ARR / cf_arr_amount_es  — ARR value
-cf_arr_bucket                        — ARR tier/bucket
-cf_arr_at_risk                       — ARR at risk flag
-cf_current_arr / cf_fy27_starting_arr
-cf_deal_amount / cf_kore_amount / cf_partner_amount
-cf_sow_value / cf_cf_SOW Value / cf_es_amount
-cf_est_cost / cf_est_revenue
-cf_nrr / cf_actual_nrr / cf_target_nrr / cf_grr
-cf_expansion_upside / cf_expansion_weighted
-cf_ytd_downgrade_arr
-
--- Deal / Sales context:
-cf_deal_stage / cf_deal_stage_es / cf_hubspot_deal_stage
-cf_deal_owner_es / cf_account_executive
-cf_deal_priority / cf_deal_use_case
-cf_close_date / cf_close_date_es
-cf_record_id_es                     — HubSpot deal ID → join to deals.deal_id
-cf_hubspot_link                     — direct HubSpot deal URL
-cf_evaluation_stage / cf_tech_win
-
--- Implementation / Delivery:
-cf_implementation_status / cf_impl_status / cf_project_status
-cf_project_health / cf_rag / cf_rag_status / cf_risk_tier
-cf_project_type / cf_billing_type / cf_delivery_implementation_type
-cf_planned_go_live_date / cf_actual_go_live_date
-cf_sow_status / cf_sow_link / cf_signed_sow_link
-cf_complexity / cf_implementation_model
-cf_implementation_partner / cf_impl_partner
-cf_cs_manager / cf_csm / cf_csd / cf_cs_ic / cf_cs_evp
-
--- Renewal / CS:
-cf_renewal_status / cf_fy27_renewal_status / cf_renewal_stage
-cf_renewal_date / cf_renewal_quarter
-cf_contract_end_date
-cf_champion_status / cf_at_risk / cf_arr_at_risk
-cf_fy27_action_type / cf_next_fy27_action_date
-cf_open_expansion / cf_open_expansion_opp_count
-cf_open_p1_p2_count / cf_open_tickets
-cf_usage_trend / cf_platform_version
-cf_sla_status / cf_churn_reason
-
--- Resource / Hours:
-cf_estimated_hours / cf_actual_hours / cf_planned_hours
-cf_total_estimated_hours / cf_total_actual_time
-cf_budgeted_cost / cf_actual_costs_total
-cf_inv_awaiting_app / cf_investment_approved
-cf_inv_awaiting_app_fy26 / cf_investment_approved_fy26
-
--- Geography / Segmentation:
-cf_region / cf_fy27_region / cf_form_region
-cf_market / cf_kore_primary_industry
-cf_account_category / cf_account_type
-cf_product / cf_product_suite / cf_products
-cf_agent_platform / cf_agentic_type
-
--- People:
-cf_csm / cf_csd / cf_cs_manager / cf_cs_evp
-cf_account_executive / cf_sales_engineer / cf_se_leader
-cf_fde_owner / cf_fde_leader / cf_expert_service_engineer
-cf_project_manager / cf_cs_ic
-
-IMPORTANT: cf_record_id_es contains the HubSpot deal ID.
-Use to join asana_projects → deals:
-  JOIN hs_analytics.deals FINAL d ON cf_record_id_es = toString(d.deal_id)
+gid, name, owner_name, owner_email, team, status, start_on, due_on,
+created_at, modified_at, archived, color, notes, members, public,
+cf_arr, cf_arr_bucket, cf_arr_at_risk, cf_deal_stage, cf_deal_owner_es,
+cf_account_executive, cf_close_date, cf_record_id_es, cf_implementation_status,
+cf_project_health, cf_rag, cf_renewal_status, cf_renewal_date,
+cf_region, cf_csm, cf_csd, cf_at_risk, cf_open_p1_p2_count,
+cf_usage_trend, cf_expansion_upside, cf_nrr, cf_champion_status
 
 ── TABLE A3: hs_analytics.asana_project_task_association (FINAL) ─
-Maps tasks to projects (many-to-many).
-task_gid        — → asana_tasks.gid
-project_gid     — → asana_projects.gid
-project_name    — project name (denormalized)
-section         — section within the project this task belongs to
+task_gid, project_gid, project_name, section
 
 ── TABLE A4: hs_analytics.asana_portfolios (FINAL) ──────────────
-Portfolio records (groupings of related projects).
-gid             — portfolio ID (PK)
-name            — portfolio name
-owner_name / owner_email
-due_on          — portfolio due date
-created_at / color / public
-members         — member list
-status_type / status_title / status_text — portfolio status rollup
+gid, name, owner_name, owner_email, due_on, created_at, color,
+public, members, status_type, status_title, status_text
 
 ── TABLE A5: hs_analytics.asana_portfolio_project_association (FINAL)
-Maps projects to portfolios (many-to-many).
-portfolio_gid   — → asana_portfolios.gid
-portfolio_name  — (denormalized)
-project_gid     — → asana_projects.gid
-project_name    — (denormalized)
-project_owner   — project owner name
-project_status  — project status
-start_on / due_on / archived / color
+portfolio_gid, portfolio_name, project_gid, project_name,
+project_owner, project_status, start_on, due_on, archived, color
 
 ── TABLE A6: hs_analytics.asana_teams (FINAL) ───────────────────
-Team definitions. One row per team.
-gid             — team ID (PK) → join via asana_projects.team (by name)
-name            — team name (e.g. "Customer Success", "Engineering Services")
-description     — team description
-organization_gid / organization_name
-visibility      — secret / request_to_join / public
-created_at
+gid, name, description, organization_gid, organization_name, visibility, created_at
 
 ── TABLE A7: hs_analytics.asana_team_members (FINAL) ────────────
-Team membership. One row per team-member pair.
-team_gid        — → asana_teams.gid
-team_name       — (denormalized)
-member_gid      — → asana_users.gid
-member_name     — member display name
-member_email    — member email
+team_gid, team_name, member_gid, member_name, member_email
 
 ── TABLE A8: hs_analytics.asana_users (FINAL) ───────────────────
-Asana user registry. One row per user.
-gid             — user ID (PK)
-name            — display name
-email           — email address → join to asana_tasks.assignee_email
-resource_type   — always 'user'
+gid, name, email, resource_type
 
-ASANA JOIN KEYS (CRITICAL):
-- asana_tasks.assignee_email         → asana_users.email
+ASANA JOIN KEYS:
+- asana_tasks.assignee_email → asana_users.email
 - asana_project_task_association.task_gid → asana_tasks.gid
 - asana_project_task_association.project_gid → asana_projects.gid
-- asana_portfolio_project_association.portfolio_gid → asana_portfolios.gid
 - asana_portfolio_project_association.project_gid → asana_projects.gid
-- asana_team_members.member_gid      → asana_users.gid
-- asana_projects.team (name match)   → asana_teams.name
-- asana_projects.cf_record_id_es     → hs_analytics.deals.deal_id (HubSpot link)
-- asana_tasks.completed = 'true'/'false' (String — NOT Boolean)
-- asana_tasks.due_on is String — compare: due_on < toString(today())
-
-ASANA QUERY PATTERNS:
--- Overdue incomplete tasks by team:
-SELECT pta.project_name,
-       countIf(t.completed != 'true' AND t.due_on < toString(today())) AS overdue_tasks
-FROM hs_analytics.asana_tasks FINAL t
-JOIN hs_analytics.asana_project_task_association FINAL pta ON t.gid = pta.task_gid
-WHERE t.completed != 'true' AND t.due_on < toString(today()) AND t.due_on != ''
-GROUP BY pta.project_name ORDER BY overdue_tasks DESC
-
--- Task completion rate by assignee:
-SELECT t.assignee_name,
-       countIf(t.completed = 'true') AS done,
-       count() AS total,
-       round(countIf(t.completed = 'true') / count() * 100, 1) AS pct
-FROM hs_analytics.asana_tasks FINAL t
-WHERE t.assignee_name != '' AND t.assignee_name IS NOT NULL
-GROUP BY t.assignee_name ORDER BY total DESC
-
--- Projects in a portfolio with status:
-SELECT ppa.project_name, ppa.project_status, ppa.due_on, ppa.project_owner
-FROM hs_analytics.asana_portfolios FINAL pf
-JOIN hs_analytics.asana_portfolio_project_association FINAL ppa
-  ON pf.gid = ppa.portfolio_gid
-WHERE pf.name ILIKE '%<portfolio_name>%'
-ORDER BY ppa.due_on
-
--- CS projects at risk with ARR:
-SELECT name, cf_csm, cf_region, cf_arr, cf_rag, cf_renewal_status,
-       cf_renewal_date, cf_champion_status, cf_open_p1_p2_count
-FROM hs_analytics.asana_projects FINAL
-WHERE cf_at_risk = 'Yes' OR cf_rag IN ('Red','At Risk')
-ORDER BY toFloat32OrZero(cf_arr) DESC
-
--- Link Asana project → HubSpot deal:
-SELECT p.name AS project, p.cf_record_id_es AS hs_deal_id,
-       d.deal_name, d.deal_stage, d.amount, p.cf_implementation_status
-FROM hs_analytics.asana_projects FINAL p
-JOIN hs_analytics.deals FINAL d
-  ON p.cf_record_id_es = toString(d.deal_id)
-WHERE <deals base filters>
-
+- asana_projects.cf_record_id_es → hs_analytics.deals.deal_id
+- asana_tasks.completed is String: use completed = 'true' (NOT Boolean)
+- asana_tasks.due_on is String: compare with toString(today())
 
 =================================================================
 MANDATORY BASE FILTERS (every deals query)
@@ -931,15 +702,15 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
 
     GONG_TABLES   = ["go_calls","go_users"]
     is_gong_query = any(t in sql for t in GONG_TABLES)
-    MAX_RETRIES   = 3 if is_gong_query else 1   # retry Gong queries up to 3× on transient 500s
-    RETRY_DELAYS  = [2, 5]                        # seconds between attempts
+    MAX_RETRIES   = 3 if is_gong_query else 1
+    RETRY_DELAYS  = [2, 5]
 
     last_error: str = ""
     resp = None
     for attempt in range(MAX_RETRIES):
         if attempt > 0:
             delay = RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
-            print(f"   ⏳ Retry {attempt}/{MAX_RETRIES - 1} after {delay}s (Gong 500 backoff)…")
+            print(f"   ⏳ Retry {attempt}/{MAX_RETRIES - 1} after {delay}s…")
             time.sleep(delay)
         try:
             resp = httpx.post(
@@ -963,11 +734,11 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
             last_error = resp.text[:400]
             print(f"   ❌ HTTP 500 on attempt {attempt + 1}/{MAX_RETRIES}: {last_error[:120]}")
             if attempt < MAX_RETRIES - 1:
-                continue   # retry
+                continue
             if is_gong_query:
                 return (
                     f"DATABASE ERROR: HTTP 500 on Gong table query (failed after {MAX_RETRIES} attempts). "
-                    f"The Gong tables (go_calls, go_users) appear to be unavailable"
+                    f"The Gong tables (go_calls, go_users) appear to be unavailable — "
                     f"this is a server-side infrastructure issue, not a query logic error. "
                     f"Check /debug/db to confirm Gong table connectivity. "
                     f"Raw error: {last_error[:300]}"
@@ -975,7 +746,7 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
             return f"DATABASE ERROR: HTTP 500 (failed after {MAX_RETRIES} attempts): {last_error}"
         if resp.status_code != 200:
             return f"DATABASE ERROR: HTTP {resp.status_code} — {resp.text[:300]}"
-        break  # success — exit retry loop
+        break
 
     if resp is None:
         return "DATABASE CONNECTION FAILED: No response received."
@@ -1070,7 +841,7 @@ async def on_startup():
     global _SYSTEM_PROMPT
     discover_schema()
     _SYSTEM_PROMPT = _build_system_prompt()
-    print("🚀 DIUD v6 started — enhanced analytics + SVG funnel viz + Sonnet/Opus selector.")
+    print("🚀 DIUD v6.1 started — intent-aware routing + always-query-DB + Sonnet/Opus selector.")
 
 
 # =============================================================================
@@ -1110,7 +881,7 @@ class ChatRequest(BaseModel):
     message: str
     history: List[ChatMessage] = []
     session_id: Optional[str] = None
-    model: Optional[str] = None   # "sonnet" | "opus" | full model string
+    model: Optional[str] = None
 
 class ExportPreviewRequest(BaseModel):
     conversation: List[ChatMessage] = []
@@ -1127,25 +898,15 @@ class ExportDownloadRequest(BaseModel):
 
 
 # =============================================================================
-# Claude tool loop
+# Model resolution helpers
 # =============================================================================
-def _extract_text(content_blocks) -> str:
-    return "\n".join(
-        b.text for b in content_blocks if hasattr(b, "text") and b.text
-    ).strip()
-
-
 def _resolve_model(model_hint: Optional[str]) -> str:
-    """Resolve user model preference to a full model string."""
     if not model_hint:
         return _DEFAULT_MODEL
-    # Accept short names
     if model_hint in MODELS:
         return MODELS[model_hint]
-    # Accept full model strings
     if model_hint in MODELS.values():
         return model_hint
-    # Fuzzy match
     hint_lower = model_hint.lower()
     if "opus" in hint_lower:
         return MODELS["opus"]
@@ -1155,62 +916,55 @@ def _resolve_model(model_hint: Optional[str]) -> str:
 
 
 def _is_opus_model(model: str) -> bool:
-    """Return True for Opus models that use extended thinking (no temperature support)."""
     return "opus" in model.lower()
 
 
 def _build_api_kwargs(model: str, **kwargs) -> dict:
-    """Build API call kwargs, omitting temperature for Opus/extended-thinking models."""
+    """Build API call kwargs. Opus models use extended thinking — strip temperature."""
     api_kwargs = dict(model=model, **kwargs)
     if _is_opus_model(model):
-        # Opus 4+ uses extended thinking — temperature is deprecated and must be omitted
         api_kwargs.pop("temperature", None)
     return api_kwargs
 
 
-_DATA_QUESTION_PATTERNS = re.compile(
-    r'\b(how many|how much|what is|what are|show me|list|give me|'
-    r'top \d|pipeline|deals?|stage|funnel|region|AE|attain|win rate|'
-    r'closed|open|stall|value|amount|quota|target|coverage|'
-    r'breakdown|summary|compare|which|who has|count|total|'
-    r'conversion|drop.?off|revenue|forecast|'
-    r'gong|call|calls|rep.?performance|'
-    r'next.?step|dark.?deal|no.?call|brief|rep.?performance|'
-    r'asana|task|tasks|project|portfolio|overdue|backlog|assignee|'
-    r'completion|due.?date|team.?workload|subtask)\b',
-    re.IGNORECASE,
-)
-
-_GREETING_PATTERNS = re.compile(
-    r'^(hi|hey|hello|good morning|good afternoon|good evening|'
-    r'thanks|thank you|ok|okay|got it|sure|sounds good)[!.,\s]*$',
-    re.IGNORECASE,
-)
-
-def _is_data_question(message: str) -> bool:
-    """True when the last user message is a data/analytics question."""
-    msg = message.strip()
-    if _GREETING_PATTERNS.match(msg):
-        return False
-    if len(msg) < 15:                     # very short — probably not a query
-        return False
-    return bool(_DATA_QUESTION_PATTERNS.search(msg))
+# =============================================================================
+# Claude tool loop
+# =============================================================================
+def _extract_text(content_blocks) -> str:
+    return "\n".join(
+        b.text for b in content_blocks if hasattr(b, "text") and b.text
+    ).strip()
 
 
-def _call_claude(messages: list, max_tokens: int = 8192,
-                 session_id: Optional[str] = None,
-                 model_hint: Optional[str] = None) -> str:
-    """Run Claude with query_clickhouse tool. Up to 5 tool rounds."""
+def _call_claude(
+    messages: list,
+    max_tokens: int = 8192,
+    session_id: Optional[str] = None,
+    model_hint: Optional[str] = None,
+    intent: str = "general",
+) -> str:
+    """
+    Run Claude with query_clickhouse tool. Up to 5 tool rounds.
+
+    tool_choice logic (fixes the 'error for most queries' bug):
+      - intent == 'data_query' → force tool use on the FIRST turn only
+        (tool_choice: any). This guarantees DB is queried.
+      - intent == 'greeting' or 'general' → never force tool use
+        (tool_choice: auto). This prevents API errors on non-data messages.
+      - All subsequent turns always use tool_choice: auto.
+    """
     model = _resolve_model(model_hint)
-    print(f"🤖 Using model: {model}")
+    print(f"🤖 model={model} intent={intent} session={session_id}")
 
+    # Sanitise message list — flatten any list-content messages to text
     safe_messages = []
     for m in messages:
         content = m.get("content", "")
         if isinstance(content, list):
             text_parts = [
                 b.get("text", "") if isinstance(b, dict) else (b.text if hasattr(b, "text") else "")
-                for b in content if (isinstance(b, dict) and b.get("type") == "text")
+                for b in content
+                if (isinstance(b, dict) and b.get("type") == "text")
                    or (hasattr(b, "type") and b.type == "text")
             ]
             text = "\n".join(t for t in text_parts if t).strip()
@@ -1219,27 +973,29 @@ def _call_claude(messages: list, max_tokens: int = 8192,
         else:
             safe_messages.append({"role": m["role"], "content": content})
 
-    # Determine whether to force tool use on first turn
-    last_user_msg = next(
-        (m["content"] for m in reversed(safe_messages) if m["role"] == "user"
-         and isinstance(m["content"], str)), ""
-    )
-    force_tool = _is_data_question(last_user_msg)
-    tool_choice = {"type": "any"} if force_tool else {"type": "auto"}
-    print(f"   tool_choice={tool_choice['type']} (data_question={force_tool})")
+    # ── First-turn tool_choice based on intent ────────────────────────────
+    # 'any'  → Claude MUST call the tool (use only when intent==data_query)
+    # 'auto' → Claude decides (safe for greetings and general questions)
+    if intent == "data_query":
+        first_tool_choice = {"type": "any"}
+    else:
+        first_tool_choice = {"type": "auto"}
+
+    print(f"   first tool_choice={first_tool_choice['type']}")
 
     response = _ai_client.messages.create(
         **_build_api_kwargs(
             model,
-            system=_SYSTEM_PROMPT,
-            messages=safe_messages,
-            tools=[_QUERY_TOOL],
-            tool_choice=tool_choice,
-            temperature=0,
-            max_tokens=max_tokens,
+            system     = _SYSTEM_PROMPT,
+            messages   = safe_messages,
+            tools      = [_QUERY_TOOL],
+            tool_choice= first_tool_choice,
+            temperature= 0,
+            max_tokens = max_tokens,
         )
     )
 
+    # ── Tool-use loop (up to 5 rounds, always 'auto' after first) ─────────
     for _ in range(5):
         if response.stop_reason != "tool_use":
             break
@@ -1248,12 +1004,13 @@ def _call_claude(messages: list, max_tokens: int = 8192,
         if not tool_block:
             break
 
-        sql          = tool_block.input.get("sql", "")
+        sql = tool_block.input.get("sql", "")
         print("\n========== GENERATED SQL ==========")
         print(sql)
         print("===================================\n")
+
         query_result = run_clickhouse_query(sql, session_id=session_id)
-        is_error     = any(query_result.startswith(p) for p in [
+        is_error = any(query_result.startswith(p) for p in [
             "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
         ])
 
@@ -1267,15 +1024,16 @@ def _call_claude(messages: list, max_tokens: int = 8192,
             }]},
         ]
 
+        # All subsequent rounds: auto (Claude decides if more queries needed)
         response = _ai_client.messages.create(
             **_build_api_kwargs(
                 model,
-                system=_SYSTEM_PROMPT,
-                messages=safe_messages,
-                tools=[_QUERY_TOOL],
-                tool_choice={"type": "auto"},   # subsequent rounds: auto
-                temperature=0,
-                max_tokens=max_tokens,
+                system     = _SYSTEM_PROMPT,
+                messages   = safe_messages,
+                tools      = [_QUERY_TOOL],
+                tool_choice= {"type": "auto"},
+                temperature= 0,
+                max_tokens = max_tokens,
             )
         )
 
@@ -1286,7 +1044,7 @@ def _call_claude(messages: list, max_tokens: int = 8192,
 
 
 # =============================================================================
-# Routes — chat
+# Routes — static
 # =============================================================================
 @app.get("/", response_class=HTMLResponse)
 def root():
@@ -1337,26 +1095,43 @@ def refresh_schema():
     return {"status": "refreshed", "tables": list(_LIVE_SCHEMA.keys())}
 
 
+# =============================================================================
+# Routes — chat
+# =============================================================================
 @app.post("/chat")
 def chat(payload: ChatRequest):
+    # Detect prior data in session (for export intent classification)
+    has_prior_data = (
+        payload.session_id is not None
+        and payload.session_id in _SESSION_STORE
+    )
+
+    # Classify intent BEFORE calling Claude
+    intent = classify_intent(payload.message, has_prior_data=has_prior_data)
+    print(f"💬 [chat] session={payload.session_id} intent={intent} msg={payload.message[:80]}")
+
     messages = [{"role": m.role, "content": m.content} for m in payload.history]
     messages.append({"role": "user", "content": payload.message})
-    print(f"💬 [chat] session={payload.session_id} model={payload.model} msg={payload.message[:80]}")
 
     try:
-        reply = _call_claude(messages, session_id=payload.session_id, model_hint=payload.model)
+        reply = _call_claude(
+            messages,
+            session_id = payload.session_id,
+            model_hint = payload.model,
+            intent     = intent,
+        )
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Claude error: {exc}")
 
     has_dataset = payload.session_id is not None and payload.session_id in _SESSION_STORE
-    stored = _SESSION_STORE.get(payload.session_id) if payload.session_id else None
-
+    stored      = _SESSION_STORE.get(payload.session_id) if payload.session_id else None
     funnel_data = _extract_funnel_data(reply)
     chart_data  = _extract_chart_data(reply)
 
     return {
         "reply":         reply,
+        "intent":        intent,                  # expose to frontend for debugging
         "has_dataset":   has_dataset,
         "dataset_rows":  stored.total_rows if stored else 0,
         "export_intent": "__EXPORT_INTENT__" in reply,
@@ -1366,7 +1141,6 @@ def chat(payload: ChatRequest):
 
 
 def _extract_funnel_data(reply: str) -> Optional[dict]:
-    """Extract funnel-data JSON block from reply if present."""
     match = re.search(r'```funnel-data\s*\n(.*?)\n```', reply, re.DOTALL)
     if match:
         try:
@@ -1377,7 +1151,6 @@ def _extract_funnel_data(reply: str) -> Optional[dict]:
 
 
 def _extract_chart_data(reply: str) -> Optional[dict]:
-    """Extract chart-data JSON block from reply if present."""
     match = re.search(r'```chart-data\s*\n(.*?)\n```', reply, re.DOTALL)
     if match:
         try:
@@ -1411,13 +1184,24 @@ def chat_retry(payload: RetryRequest):
     last_user_msg = clean_history[-1].content
     prior_history = clean_history[:-1]
 
-    print(f"🔄 [retry] session={payload.session_id} retrying: {last_user_msg[:80]}")
+    has_prior_data = (
+        payload.session_id is not None
+        and payload.session_id in _SESSION_STORE
+    )
+    intent = classify_intent(last_user_msg, has_prior_data=has_prior_data)
+
+    print(f"🔄 [retry] session={payload.session_id} intent={intent} msg={last_user_msg[:80]}")
 
     messages = [{"role": m.role, "content": m.content} for m in prior_history]
     messages.append({"role": "user", "content": last_user_msg})
 
     try:
-        reply = _call_claude(messages, session_id=payload.session_id, model_hint=payload.model)
+        reply = _call_claude(
+            messages,
+            session_id = payload.session_id,
+            model_hint = payload.model,
+            intent     = intent,
+        )
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Claude error on retry: {exc}")
@@ -1429,6 +1213,7 @@ def chat_retry(payload: RetryRequest):
 
     return {
         "reply":         reply,
+        "intent":        intent,
         "has_dataset":   has_dataset,
         "dataset_rows":  stored.total_rows if stored else 0,
         "export_intent": "__EXPORT_INTENT__" in reply,
