@@ -426,6 +426,455 @@ fy, quarter, month, region, original_source, mql_target
 deal_id_hs
 
 =================================================================
+GONG TABLES  (all in hs_analytics, ALWAYS use FINAL)
+=================================================================
+Call intelligence from Gong. No direct deal_id FK — join to deals
+via kore_employee_emailAddress / primaryUserId matching owner email.
+
+── TABLE G1: hs_analytics.go_calls (FINAL) ──────────────────────
+Primary call records. One row per call.
+id              — call ID (PK)
+title           — call title / meeting name
+direction       — Inbound / Outbound
+system          — conferencing system used
+duration        — call length in seconds (Float64)
+started         — call start timestamp (String, ISO)
+scheduled       — scheduled start time (String)
+url             — direct Gong recording link
+meetingUrl      — original meeting URL
+media           — web_conference / phone
+language        — detected language
+workspaceId     — Gong workspace
+primaryUserId   — Gong user ID of call owner → join to go_users.id
+isPrivate       — 1 if private call
+updatedAt       — last updated (DateTime64 UTC)
+scope           — call scope
+calendarEventId — calendar event reference
+clientUniqueId  — external CRM reference
+
+── TABLE G2: hs_analytics.go_calls_mv (FINAL) ───────────────────
+Materialized view of go_calls. Identical columns to go_calls.
+Use for fast aggregations (call volume, duration, recency per rep).
+Join key: primaryUserId → go_users.id
+
+── TABLE G3: hs_analytics.go_extensiveCalls (FINAL) ─────────────
+AI-enriched call data. One row per call participant (Kore employee).
+id                              — call ID → join to go_calls.id
+startdatetime                   — call start (String)
+updatedAt                       — last updated (String)
+
+IDENTITY / PARTICIPANT:
+kore_employee_emailAddress      — Kore rep's email → join to deals.deal_owner email
+kore_employee_userId            — Gong user ID → join to go_users.id
+kore_employee_title             — rep's title
+number_of_participants          — total participants on call
+
+CALL CONTENT (AI-generated):
+content_brief                   — AI summary of the full call
+content_keyPoints               — key discussion points
+content_highlight_Next_steps    — agreed next steps from the call
+content_callOutcome_name        — call outcome label (e.g. "Follow-up scheduled")
+content_callOutcome_category    — outcome category
+
+TOPIC DURATIONS (seconds spent on each topic):
+content_topic_Call_Setup_duration
+content_topic_Moving_Forward_duration
+content_topic_Next_Steps_duration
+content_topic_Pricing_duration
+content_topic_Small_Talk_duration
+content_topic_Wrap-Up_duration
+
+INTERACTION STATS:
+interaction_stat_Talk_Ratio         — rep talk ratio (e.g. "0.65")
+interaction_stat_Interactivity      — engagement score
+interaction_stat_Patience           — listener patience score
+interaction_stat_Longest_Monologue  — longest uninterrupted speech (seconds)
+interaction_stat_Longest_Customer_Story — longest customer story (seconds)
+interaction_questions_companyCount  — questions asked by Kore rep
+interaction_questions_nonCompanyCount — questions asked by customer
+
+VIDEO STATS:
+interaction_video_Webcam / Browser / Presentation / WebcamPrimaryUser
+
+TRACKER COUNTS (times keyword group mentioned):
+content_tracker_Competitors_count          — competitor mentions
+content_tracker_Budget_count               — budget mentions
+content_tracker_Pricing_(tracker)_count    — pricing discussion
+content_tracker_Next_steps_count           — next steps mentions
+content_tracker_Objections_(tracker)_count — objections raised
+content_tracker_Timeline_(beta)_count      — timeline mentions
+content_tracker_Decision_makers_(beta)_count
+content_tracker_Decision_process_(tracker)_count
+content_tracker_Discount_(tracker)_count
+content_tracker_Use_cases_count
+content_tracker_Product_feedback_count
+content_tracker_Business_goals_(tracker)_count
+content_tracker_Hyperscaler_count
+content_tracker_Budget_(tracker)_count
+content_tracker_Quantities_and_Volumes_count
+-- Industry-specific trackers (HR, Healthcare, IT, Banking, Retail, Service, Work, Recruiting):
+content_tracker_Application-Specific_(HR)_count
+content_tracker_Application-Specific_(Healthcare)_count
+content_tracker_Application-Specific_(IT)_count
+content_tracker_Application-Specific_(Process)_count
+content_tracker_Application-Specific_(Retail)_count
+content_tracker_Application-Specific_(Service)_count
+content_tracker_Application-Specific_(Work)_count
+content_tracker_Application_Specific_(Banking)_count
+content_tracker_Customer_Service_Operations_(Banking)_count
+content_tracker_Customer_Service_Operations_(Healthcare)_count
+content_tracker_Customer_Service_Operations_(IT)_count
+content_tracker_Customer_Service_Operations_(Recruiting)_count
+content_tracker_Customer_Service_Operations_(Retail)_count
+content_tracker_Customer_Service_Operations_(Service)_count
+content_tracker_Employee_Experience_(IT)_count
+content_tracker_Employee_Experience_Question_(HR)_count
+content_tracker_Employee_Experience_Vision_Question_(Work)_count
+content_tracker_Recruiter_Productivity_Question_(Recruiting)_count
+content_tracker_Process_Automation_Question_count
+
+CALL OUTLINE:
+outline_sections    — section titles from Gong's call outline
+outline_item_texts  — detailed outline item text
+
+METADATA (mirrors go_calls columns, prefixed metaData_):
+metaData_title, metaData_duration, metaData_direction,
+metaData_started, metaData_scheduled, metaData_url,
+metaData_media, metaData_language, metaData_primaryUserId,
+metaData_purpose, metaData_sdrDisposition, metaData_scope,
+metaData_workspaceId, metaData_isPrivate, metaData_customData
+
+── TABLE G4: hs_analytics.go_scorecards (FINAL) ─────────────────
+Scorecard question definitions (NOT per-call scores — this is the
+scorecard template/question registry). One row per question.
+id              — auto-increment row ID (UInt64)
+scorecardId     — scorecard template ID
+scorecardName   — scorecard name (e.g. "Discovery Call QA")
+reviewMethod    — how reviewed (e.g. "manual", "ai")
+workspaceId     — Gong workspace
+questionId      — individual question ID
+questionText    — the question text
+questionType    — question type (e.g. "score", "boolean")
+maxRange        — maximum score value
+minRange        — minimum score value
+isOverall       — 1 if this is the overall score question
+questionRevisionId
+updaterUserId   — who last updated this question
+created / updated / question_created / question_updated
+enabled         — 1 if scorecard is active
+updatedAt       — last sync timestamp (DateTime)
+
+── TABLE G5: hs_analytics.go_scorecards_mv (FINAL) ──────────────
+Materialized view of go_scorecards. Identical columns.
+Use for fast lookups of scorecard structures and question lists.
+
+── TABLE G6: hs_analytics.go_users (FINAL) ──────────────────────
+Gong user registry. One row per user.
+id              — Gong user ID (PK) → join to go_calls.primaryUserId
+emailAddress    — user email → join to deals.deal_owner / hs_analytics.owners.email
+firstName       — first name
+lastName        — last name
+title           — job title
+active          — 1 if active user
+managerId       — manager's Gong user ID → self-join for hierarchy
+created         — account created date
+updatedAt       — last updated (DateTime64 UTC)
+emailAliases    — alternate emails
+phoneNumber
+spokenLanguages
+personalMeetingUrls
+emailsImported / telephonyCallsImported / webConferencesRecorded (UInt8 flags)
+gongConnectEnabled / nonRecordedMeetingsImported
+preventEmailImport / preventWebConferenceRecording
+
+── TABLE G7: hs_analytics.go_users_mv (FINAL) ───────────────────
+Materialized view of go_users. Identical columns.
+Use for fast user lookups and manager hierarchy joins.
+
+GONG JOIN KEYS (CRITICAL):
+- go_calls.primaryUserId          → go_users.id
+- go_extensiveCalls.kore_employee_userId → go_users.id
+- go_extensiveCalls.kore_employee_emailAddress → deals.deal_owner (email match)
+- go_extensiveCalls.id            → go_calls.id  (same call)
+- go_users.managerId              → go_users.id  (manager hierarchy)
+
+GONG QUERY PATTERNS:
+-- Call volume + avg duration per rep (last 90 days):
+SELECT u.firstName, u.lastName,
+       countDistinct(c.id) AS calls,
+       round(avg(c.duration)/60, 1) AS avg_duration_min
+FROM hs_analytics.go_calls FINAL c
+JOIN hs_analytics.go_users FINAL u ON c.primaryUserId = u.id
+WHERE toDate(c.started) >= today() - 90
+GROUP BY u.firstName, u.lastName
+ORDER BY calls DESC
+
+-- Competitor mentions across all calls this quarter:
+SELECT content_tracker_Competitors_count, content_brief,
+       kore_employee_emailAddress, startdatetime
+FROM hs_analytics.go_extensiveCalls FINAL
+WHERE toDate(startdatetime) >= '2026-04-01'
+  AND toInt32(content_tracker_Competitors_count) > 0
+ORDER BY toInt32(content_tracker_Competitors_count) DESC
+
+-- Dark deals (active pipeline, no Gong call in last 30 days):
+SELECT d.deal_id, d.deal_name, d.deal_owner, d.deal_stage,
+       round(d.amount/1e6,2) AS amount_m
+FROM hs_analytics.deals FINAL d
+WHERE d.pipeline = 'default'
+  AND d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
+                       '60% - Price Negotiation','75% - Contract Review')
+  AND toDate(d.close_date) BETWEEN '2026-04-01' AND '2027-03-31'
+  AND d.deal_owner NOT IN (
+      SELECT DISTINCT kore_employee_emailAddress
+      FROM hs_analytics.go_extensiveCalls FINAL
+      WHERE toDate(startdatetime) >= today() - 30
+  )
+
+-- Call insights (brief + next steps) for a specific rep:
+SELECT startdatetime, content_brief, content_highlight_Next_steps,
+       interaction_stat_Talk_Ratio, content_callOutcome_name
+FROM hs_analytics.go_extensiveCalls FINAL
+WHERE kore_employee_emailAddress = '<rep@kore.ai>'
+ORDER BY startdatetime DESC
+LIMIT 10
+
+-- Budget / pricing / objection signals this quarter:
+SELECT kore_employee_emailAddress,
+       sum(toInt32OrZero(content_tracker_Budget_count)) AS budget_mentions,
+       sum(toInt32OrZero(content_tracker_Pricing_(tracker)_count)) AS pricing_mentions,
+       sum(toInt32OrZero(content_tracker_Objections_(tracker)_count)) AS objections
+FROM hs_analytics.go_extensiveCalls FINAL
+WHERE toDate(startdatetime) >= '2026-04-01'
+GROUP BY kore_employee_emailAddress
+ORDER BY objections DESC
+
+=================================================================
+ASANA TABLES  (all in hs_analytics, ALWAYS use FINAL)
+=================================================================
+Project and task management data. Projects are the primary entity —
+they represent customer accounts, deals, or internal workstreams.
+Rich custom fields (cf_*) carry business context like ARR, deal stage,
+region, CSM, implementation status, and renewal data.
+
+── TABLE A1: hs_analytics.asana_tasks (FINAL) ───────────────────
+Task records. One row per task.
+gid             — task ID (PK)
+name            — task title
+assignee_name   — assigned person's name
+assignee_email  — assigned person's email → join to asana_users.email
+parent_task     — parent task gid (if subtask)
+status          — task status
+start_on        — start date (String)
+due_on          — due date (String) — compare with today() for overdue
+completed       — 'true'/'false' (String — use completed = 'true')
+completed_at    — completion timestamp (String)
+created_at / modified_at — timestamps (String)
+tags            — comma-separated tag list
+notes           — task description / body
+followers       — followers list
+
+── TABLE A2: hs_analytics.asana_projects (FINAL) ────────────────
+Project records. One row per project. VERY RICH — 200+ columns.
+Core identity:
+gid             — project ID (PK)
+name            — project name (often = customer/account name)
+owner_name / owner_email
+team            — team name this project belongs to
+status          — project status
+start_on / due_on — dates (String)
+created_at / modified_at / archived
+color / notes / members / public
+
+KEY BUSINESS CUSTOM FIELDS (cf_*):
+-- Financial:
+cf_arr / cf_ARR / cf_arr_amount_es  — ARR value
+cf_arr_bucket                        — ARR tier/bucket
+cf_arr_at_risk                       — ARR at risk flag
+cf_current_arr / cf_fy27_starting_arr
+cf_deal_amount / cf_kore_amount / cf_partner_amount
+cf_sow_value / cf_cf_SOW Value / cf_es_amount
+cf_est_cost / cf_est_revenue
+cf_nrr / cf_actual_nrr / cf_target_nrr / cf_grr
+cf_expansion_upside / cf_expansion_weighted
+cf_ytd_downgrade_arr
+
+-- Deal / Sales context:
+cf_deal_stage / cf_deal_stage_es / cf_hubspot_deal_stage
+cf_deal_owner_es / cf_account_executive
+cf_deal_priority / cf_deal_use_case
+cf_close_date / cf_close_date_es
+cf_record_id_es                     — HubSpot deal ID → join to deals.deal_id
+cf_hubspot_link                     — direct HubSpot deal URL
+cf_evaluation_stage / cf_tech_win
+
+-- Implementation / Delivery:
+cf_implementation_status / cf_impl_status / cf_project_status
+cf_project_health / cf_rag / cf_rag_status / cf_risk_tier
+cf_project_type / cf_billing_type / cf_delivery_implementation_type
+cf_planned_go_live_date / cf_actual_go_live_date
+cf_sow_status / cf_sow_link / cf_signed_sow_link
+cf_complexity / cf_implementation_model
+cf_implementation_partner / cf_impl_partner
+cf_cs_manager / cf_csm / cf_csd / cf_cs_ic / cf_cs_evp
+
+-- Renewal / CS:
+cf_renewal_status / cf_fy27_renewal_status / cf_renewal_stage
+cf_renewal_date / cf_renewal_quarter
+cf_contract_end_date
+cf_champion_status / cf_at_risk / cf_arr_at_risk
+cf_fy27_action_type / cf_next_fy27_action_date
+cf_open_expansion / cf_open_expansion_opp_count
+cf_open_p1_p2_count / cf_open_tickets
+cf_usage_trend / cf_platform_version
+cf_sla_status / cf_churn_reason
+
+-- Resource / Hours:
+cf_estimated_hours / cf_actual_hours / cf_planned_hours
+cf_total_estimated_hours / cf_total_actual_time
+cf_budgeted_cost / cf_actual_costs_total
+cf_inv_awaiting_app / cf_investment_approved
+cf_inv_awaiting_app_fy26 / cf_investment_approved_fy26
+
+-- Geography / Segmentation:
+cf_region / cf_fy27_region / cf_form_region
+cf_market / cf_kore_primary_industry
+cf_account_category / cf_account_type
+cf_product / cf_product_suite / cf_products
+cf_agent_platform / cf_agentic_type
+
+-- People:
+cf_csm / cf_csd / cf_cs_manager / cf_cs_evp
+cf_account_executive / cf_sales_engineer / cf_se_leader
+cf_fde_owner / cf_fde_leader / cf_expert_service_engineer
+cf_project_manager / cf_cs_ic
+
+IMPORTANT: cf_record_id_es contains the HubSpot deal ID.
+Use to join asana_projects → deals:
+  JOIN hs_analytics.deals FINAL d ON cf_record_id_es = toString(d.deal_id)
+
+── TABLE A3: hs_analytics.asana_project_task_association (FINAL) ─
+Maps tasks to projects (many-to-many).
+task_gid        — → asana_tasks.gid
+project_gid     — → asana_projects.gid
+project_name    — project name (denormalized)
+section         — section within the project this task belongs to
+
+── TABLE A4: hs_analytics.asana_portfolios (FINAL) ──────────────
+Portfolio records (groupings of related projects).
+gid             — portfolio ID (PK)
+name            — portfolio name
+owner_name / owner_email
+due_on          — portfolio due date
+created_at / color / public
+members         — member list
+status_type / status_title / status_text — portfolio status rollup
+
+── TABLE A5: hs_analytics.asana_portfolio_project_association (FINAL)
+Maps projects to portfolios (many-to-many).
+portfolio_gid   — → asana_portfolios.gid
+portfolio_name  — (denormalized)
+project_gid     — → asana_projects.gid
+project_name    — (denormalized)
+project_owner   — project owner name
+project_status  — project status
+start_on / due_on / archived / color
+
+── TABLE A6: hs_analytics.asana_teams (FINAL) ───────────────────
+Team definitions. One row per team.
+gid             — team ID (PK) → join via asana_projects.team (by name)
+name            — team name (e.g. "Customer Success", "Engineering Services")
+description     — team description
+organization_gid / organization_name
+visibility      — secret / request_to_join / public
+created_at
+
+── TABLE A7: hs_analytics.asana_team_members (FINAL) ────────────
+Team membership. One row per team-member pair.
+team_gid        — → asana_teams.gid
+team_name       — (denormalized)
+member_gid      — → asana_users.gid
+member_name     — member display name
+member_email    — member email
+
+── TABLE A8: hs_analytics.asana_users (FINAL) ───────────────────
+Asana user registry. One row per user.
+gid             — user ID (PK)
+name            — display name
+email           — email address → join to asana_tasks.assignee_email
+resource_type   — always 'user'
+
+ASANA JOIN KEYS (CRITICAL):
+- asana_tasks.assignee_email         → asana_users.email
+- asana_project_task_association.task_gid → asana_tasks.gid
+- asana_project_task_association.project_gid → asana_projects.gid
+- asana_portfolio_project_association.portfolio_gid → asana_portfolios.gid
+- asana_portfolio_project_association.project_gid → asana_projects.gid
+- asana_team_members.member_gid      → asana_users.gid
+- asana_projects.team (name match)   → asana_teams.name
+- asana_projects.cf_record_id_es     → hs_analytics.deals.deal_id (HubSpot link)
+- asana_tasks.completed = 'true'/'false' (String — NOT Boolean)
+- asana_tasks.due_on is String — compare: due_on < toString(today())
+
+ASANA QUERY PATTERNS:
+-- Overdue incomplete tasks by team:
+SELECT pta.project_name,
+       countIf(t.completed != 'true' AND t.due_on < toString(today())) AS overdue_tasks
+FROM hs_analytics.asana_tasks FINAL t
+JOIN hs_analytics.asana_project_task_association FINAL pta ON t.gid = pta.task_gid
+WHERE t.completed != 'true' AND t.due_on < toString(today()) AND t.due_on != ''
+GROUP BY pta.project_name ORDER BY overdue_tasks DESC
+
+-- Task completion rate by assignee:
+SELECT t.assignee_name,
+       countIf(t.completed = 'true') AS done,
+       count() AS total,
+       round(countIf(t.completed = 'true') / count() * 100, 1) AS pct
+FROM hs_analytics.asana_tasks FINAL t
+WHERE t.assignee_name != '' AND t.assignee_name IS NOT NULL
+GROUP BY t.assignee_name ORDER BY total DESC
+
+-- Projects in a portfolio with status:
+SELECT ppa.project_name, ppa.project_status, ppa.due_on, ppa.project_owner
+FROM hs_analytics.asana_portfolios FINAL pf
+JOIN hs_analytics.asana_portfolio_project_association FINAL ppa
+  ON pf.gid = ppa.portfolio_gid
+WHERE pf.name ILIKE '%<portfolio_name>%'
+ORDER BY ppa.due_on
+
+-- CS projects at risk with ARR:
+SELECT name, cf_csm, cf_region, cf_arr, cf_rag, cf_renewal_status,
+       cf_renewal_date, cf_champion_status, cf_open_p1_p2_count
+FROM hs_analytics.asana_projects FINAL
+WHERE cf_at_risk = 'Yes' OR cf_rag IN ('Red','At Risk')
+ORDER BY toFloat32OrZero(cf_arr) DESC
+
+-- Link Asana project → HubSpot deal:
+SELECT p.name AS project, p.cf_record_id_es AS hs_deal_id,
+       d.deal_name, d.deal_stage, d.amount, p.cf_implementation_status
+FROM hs_analytics.asana_projects FINAL p
+JOIN hs_analytics.deals FINAL d
+  ON p.cf_record_id_es = toString(d.deal_id)
+WHERE <deals base filters>
+
+GONG + ASANA ANALYTICAL INTENTS:
+- "Call activity / insights for a deal"  → go_extensiveCalls by kore_employee_emailAddress
+- "Dark deals / no recent calls"         → deals vs go_extensiveCalls, no match in 30d
+- "Competitor mentions this quarter"     → go_extensiveCalls.content_tracker_Competitors_count
+- "Talk ratio / rep engagement"          → go_extensiveCalls.interaction_stat_Talk_Ratio
+- "Budget / pricing signals"             → tracker count columns in go_extensiveCalls
+- "Next steps from calls"                → go_extensiveCalls.content_highlight_Next_steps
+- "Rep call volume"                      → go_calls + go_users join on primaryUserId
+- "Scorecard questions"                  → go_scorecards by scorecardName
+- "Overdue tasks"                        → asana_tasks WHERE completed!='true' AND due_on < today
+- "Projects at risk / red RAG"           → asana_projects.cf_rag / cf_at_risk
+- "Renewal pipeline health"              → asana_projects cf_renewal_status + cf_arr
+- "CSM workload"                         → asana_projects GROUP BY cf_csm
+- "Deal → implementation status"         → asana_projects JOIN deals on cf_record_id_es
+- "Portfolio health"                     → asana_portfolio_project_association + project status
+- "Team task backlog"                    → asana_tasks → asana_project_task_association → project.team
+
+=================================================================
 MANDATORY BASE FILTERS (every deals query)
 =================================================================
 WHERE pipeline = 'default'
@@ -735,7 +1184,11 @@ _DATA_QUESTION_PATTERNS = re.compile(
     r'top \d|pipeline|deals?|stage|funnel|region|AE|attain|win rate|'
     r'closed|open|stall|value|amount|quota|target|coverage|'
     r'breakdown|summary|compare|which|who has|count|total|'
-    r'conversion|drop.?off|revenue|forecast)\b',
+    r'conversion|drop.?off|revenue|forecast|'
+    r'gong|call|calls|scorecard|talk.?ratio|sentiment|competitor|'
+    r'next.?step|dark.?deal|no.?call|brief|rep.?performance|'
+    r'asana|task|tasks|project|portfolio|overdue|backlog|assignee|'
+    r'completion|due.?date|team.?workload|subtask)\b',
     re.IGNORECASE,
 )
 
