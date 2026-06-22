@@ -865,6 +865,7 @@ GONG + ASANA ANALYTICAL INTENTS:
 - "Budget / pricing signals"             → tracker count columns in go_extensiveCalls
 - "Next steps from calls"                → go_extensiveCalls.content_highlight_Next_steps
 - "Rep call volume"                      → go_calls + go_users join on primaryUserId
+                                           If go_calls returns HTTP 500, try go_extensiveCalls with COUNT(*) GROUP BY kore_employee_emailAddress as fallback
 - "Scorecard questions"                  → go_scorecards by scorecardName
 - "Overdue tasks"                        → asana_tasks WHERE completed!='true' AND due_on < today
 - "Projects at risk / red RAG"           → asana_projects.cf_rag / cf_at_risk
@@ -998,6 +999,15 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
         if resp.status_code == 422:
             return f"ERROR: Proxy rejected query (422): {resp.text[:400]}"
         if resp.status_code == 500:
+            gong_tables = ["go_extensiveCalls", "go_calls", "go_calls_mv", "go_users", "go_scorecards"]
+            is_gong = any(t in sql for t in gong_tables)
+            if is_gong:
+                return (
+                    f"DATABASE ERROR: HTTP 500 on Gong table query. "
+                    f"The Gong tables (go_extensiveCalls, go_calls, go_calls_mv) appear to be unavailable — "
+                    f"this is a server-side infrastructure issue, not a query logic error. "
+                    f"Raw error: {resp.text[:300]}"
+                )
             return f"DATABASE ERROR: HTTP 500: {resp.text[:400]}"
         if resp.status_code != 200:
             return f"DATABASE ERROR: HTTP {resp.status_code} — {resp.text[:300]}"
@@ -1179,6 +1189,20 @@ def _resolve_model(model_hint: Optional[str]) -> str:
     return _DEFAULT_MODEL
 
 
+def _is_opus_model(model: str) -> bool:
+    """Return True for Opus models that use extended thinking (no temperature support)."""
+    return "opus" in model.lower()
+
+
+def _build_api_kwargs(model: str, **kwargs) -> dict:
+    """Build API call kwargs, omitting temperature for Opus/extended-thinking models."""
+    api_kwargs = dict(model=model, **kwargs)
+    if _is_opus_model(model):
+        # Opus 4+ uses extended thinking — temperature is deprecated and must be omitted
+        api_kwargs.pop("temperature", None)
+    return api_kwargs
+
+
 _DATA_QUESTION_PATTERNS = re.compile(
     r'\b(how many|how much|what is|what are|show me|list|give me|'
     r'top \d|pipeline|deals?|stage|funnel|region|AE|attain|win rate|'
@@ -1240,13 +1264,15 @@ def _call_claude(messages: list, max_tokens: int = 8192,
     print(f"   tool_choice={tool_choice['type']} (data_question={force_tool})")
 
     response = _ai_client.messages.create(
-        model=model,
-        system=_SYSTEM_PROMPT,
-        messages=safe_messages,
-        tools=[_QUERY_TOOL],
-        tool_choice=tool_choice,
-        temperature=0,
-        max_tokens=max_tokens,
+        **_build_api_kwargs(
+            model,
+            system=_SYSTEM_PROMPT,
+            messages=safe_messages,
+            tools=[_QUERY_TOOL],
+            tool_choice=tool_choice,
+            temperature=0,
+            max_tokens=max_tokens,
+        )
     )
 
     for _ in range(5):
@@ -1274,13 +1300,15 @@ def _call_claude(messages: list, max_tokens: int = 8192,
         ]
 
         response = _ai_client.messages.create(
-            model=model,
-            system=_SYSTEM_PROMPT,
-            messages=safe_messages,
-            tools=[_QUERY_TOOL],
-            tool_choice={"type": "auto"},   # subsequent rounds: auto
-            temperature=0,
-            max_tokens=max_tokens,
+            **_build_api_kwargs(
+                model,
+                system=_SYSTEM_PROMPT,
+                messages=safe_messages,
+                tools=[_QUERY_TOOL],
+                tool_choice={"type": "auto"},   # subsequent rounds: auto
+                temperature=0,
+                max_tokens=max_tokens,
+            )
         )
 
     reply = _extract_text(response.content)
@@ -1622,11 +1650,13 @@ REQUIREMENTS:
 Generate the document now:"""
 
     response = _ai_client.messages.create(
-        model   = _DEFAULT_MODEL,
-        system  = "You are a professional business report writer. Generate clean, well-structured documents.",
-        messages= [{"role": "user", "content": prompt}],
-        temperature = 0,
-        max_tokens  = 4096,
+        **_build_api_kwargs(
+            _DEFAULT_MODEL,
+            system  = "You are a professional business report writer. Generate clean, well-structured documents.",
+            messages= [{"role": "user", "content": prompt}],
+            temperature = 0,
+            max_tokens  = 4096,
+        )
     )
     ai_text = _extract_text(response.content)
 
