@@ -429,105 +429,187 @@ deal_id_hs
 =================================================================
 GONG TABLES  (all in hs_analytics, ALWAYS use FINAL)
 =================================================================
-Call intelligence from Gong. No direct deal_id FK — join to deals
-via kore_employee_emailAddress / primaryUserId matching owner email.
+=================================================================
+GONG TABLES (all in hs_analytics, ALWAYS use FINAL)
+===================================================
+
+Call activity and user information from Gong.
 
 ── TABLE G1: hs_analytics.go_calls (FINAL) ──────────────────────
-Primary call records. One row per call.
+
+One row per call.
+
 id              — call ID (PK)
 title           — call title / meeting name
 direction       — Inbound / Outbound
-system          — conferencing system used
-duration        — call length in seconds (Float64)
-started         — call start timestamp (String, ISO)
-scheduled       — scheduled start time (String)
-url             — direct Gong recording link
+system          — conferencing system
+duration        — call length in seconds
+started         — call start timestamp
+scheduled       — scheduled meeting timestamp
+url             — Gong recording URL
 meetingUrl      — original meeting URL
-media           — web_conference / phone
-language        — detected language
+media           — web conference / phone
+language        — call language
 workspaceId     — Gong workspace
-primaryUserId   — Gong user ID of call owner → join to go_users.id
-isPrivate       — 1 if private call
-updatedAt       — last updated (DateTime64 UTC)
+primaryUserId   — Gong user ID
+isPrivate       — private call flag
+updatedAt       — last updated timestamp
 scope           — call scope
-calendarEventId — calendar event reference
-clientUniqueId  — external CRM reference
+calendarEventId — calendar reference
+clientUniqueId  — external reference
 
+──────────────────────────────────────────────────────────────────
 
 ── TABLE G2: hs_analytics.go_users (FINAL) ──────────────────────
-Gong user registry. One row per user.
-id              — Gong user ID (PK) → join to go_calls.primaryUserId
-emailAddress    — user email → join to deals.deal_owner / hs_analytics.owners.email
+
+Gong user registry.
+
+id              — Gong user ID (PK)
+emailAddress    — user email
 firstName       — first name
 lastName        — last name
 title           — job title
-active          — 1 if active user
-managerId       — manager's Gong user ID → self-join for hierarchy
-created         — account created date
-updatedAt       — last updated (DateTime64 UTC)
-emailAliases    — alternate emails
-phoneNumber
-spokenLanguages
-personalMeetingUrls
-emailsImported / telephonyCallsImported / webConferencesRecorded (UInt8 flags)
-gongConnectEnabled / nonRecordedMeetingsImported
-preventEmailImport / preventWebConferenceRecording
+active          — active flag
+managerId       — manager Gong user ID
+created         — user created date
+updatedAt       — last updated timestamp
 
+──────────────────────────────────────────────────────────────────
 
-GONG JOIN KEYS (CRITICAL):
-- go_calls.primaryUserId          → go_users.id
-- go_users.managerId              → go_users.id  (manager hierarchy)
+GONG JOIN KEYS
 
-GONG QUERY PATTERNS:
--- Call volume + avg duration per rep (last 90 days):
-SELECT u.firstName, u.lastName,
-       countDistinct(c.id) AS calls,
-       round(avg(c.duration)/60, 1) AS avg_duration_min
+go_calls.primaryUserId = go_users.id
+
+──────────────────────────────────────────────────────────────────
+
+SUPPORTED GONG ANALYSIS
+
+1. Call volume by rep
+2. Average call duration
+3. Total call duration
+4. Inbound vs outbound calls
+5. Call activity trends
+6. Rep productivity analysis
+7. Manager hierarchy call rollups
+8. Active vs inactive reps
+9. Call distribution by user
+10. Recent call activity
+
+──────────────────────────────────────────────────────────────────
+
+EXAMPLE QUERIES
+
+-- Call volume by rep
+
+SELECT
+concat(u.firstName,' ',u.lastName) AS rep_name,
+countDistinct(c.id) AS total_calls
 FROM hs_analytics.go_calls FINAL c
-JOIN hs_analytics.go_users FINAL u ON c.primaryUserId = u.id
-WHERE toDate(c.started) >= today() - 90
-GROUP BY u.firstName, u.lastName
-ORDER BY calls DESC
+JOIN hs_analytics.go_users FINAL u
+ON c.primaryUserId = u.id
+GROUP BY rep_name
+ORDER BY total_calls DESC
 
--- Competitor mentions across all calls this quarter:
-SELECT content_tracker_Competitors_count, content_brief,
-       kore_employee_emailAddress, startdatetime
-FROM hs_analytics.go_extensiveCalls FINAL
-WHERE toDate(startdatetime) >= '2026-04-01'
-  AND toInt32(content_tracker_Competitors_count) > 0
-ORDER BY toInt32(content_tracker_Competitors_count) DESC
+---
 
--- Dark deals (active pipeline, no Gong call in last 30 days):
-SELECT d.deal_id, d.deal_name, d.deal_owner, d.deal_stage,
-       round(d.amount/1e6,2) AS amount_m
-FROM hs_analytics.deals FINAL d
-WHERE d.pipeline = 'default'
-  AND d.deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
-                       '60% - Price Negotiation','75% - Contract Review')
-  AND toDate(d.close_date) BETWEEN '2026-04-01' AND '2027-03-31'
-  AND d.deal_owner NOT IN (
-      SELECT DISTINCT kore_employee_emailAddress
-      FROM hs_analytics.go_extensiveCalls FINAL
-      WHERE toDate(startdatetime) >= today() - 30
-  )
+-- Average call duration by rep
 
--- Call insights (brief + next steps) for a specific rep:
-SELECT startdatetime, content_brief, content_highlight_Next_steps,
-       interaction_stat_Talk_Ratio, content_callOutcome_name
-FROM hs_analytics.go_extensiveCalls FINAL
-WHERE kore_employee_emailAddress = '<rep@kore.ai>'
-ORDER BY startdatetime DESC
-LIMIT 10
+SELECT
+concat(u.firstName,' ',u.lastName) AS rep_name,
+round(avg(c.duration)/60,1) AS avg_duration_minutes
+FROM hs_analytics.go_calls FINAL c
+JOIN hs_analytics.go_users FINAL u
+ON c.primaryUserId = u.id
+GROUP BY rep_name
+ORDER BY avg_duration_minutes DESC
 
--- Budget / pricing / objection signals this quarter:
-SELECT kore_employee_emailAddress,
-       sum(toInt32OrZero(content_tracker_Budget_count)) AS budget_mentions,
-       sum(toInt32OrZero(content_tracker_Pricing_(tracker)_count)) AS pricing_mentions,
-       sum(toInt32OrZero(content_tracker_Objections_(tracker)_count)) AS objections
-FROM hs_analytics.go_extensiveCalls FINAL
-WHERE toDate(startdatetime) >= '2026-04-01'
-GROUP BY kore_employee_emailAddress
-ORDER BY objections DESC
+---
+
+-- Total call time by rep
+
+SELECT
+concat(u.firstName,' ',u.lastName) AS rep_name,
+round(sum(c.duration)/3600,2) AS total_call_hours
+FROM hs_analytics.go_calls FINAL c
+JOIN hs_analytics.go_users FINAL u
+ON c.primaryUserId = u.id
+GROUP BY rep_name
+ORDER BY total_call_hours DESC
+
+---
+
+-- Calls in the last 30 days
+
+SELECT
+concat(u.firstName,' ',u.lastName) AS rep_name,
+countDistinct(c.id) AS calls_last_30_days
+FROM hs_analytics.go_calls FINAL c
+JOIN hs_analytics.go_users FINAL u
+ON c.primaryUserId = u.id
+WHERE toDate(parseDateTimeBestEffort(c.started))
+>= today() - 30
+GROUP BY rep_name
+ORDER BY calls_last_30_days DESC
+
+---
+
+-- Inbound vs outbound calls
+
+SELECT
+direction,
+countDistinct(id) AS total_calls
+FROM hs_analytics.go_calls FINAL
+GROUP BY direction
+ORDER BY total_calls DESC
+
+---
+
+-- Call activity by manager
+
+SELECT
+concat(m.firstName,' ',m.lastName) AS manager_name,
+countDistinct(c.id) AS total_calls
+FROM hs_analytics.go_calls FINAL c
+JOIN hs_analytics.go_users FINAL u
+ON c.primaryUserId = u.id
+LEFT JOIN hs_analytics.go_users FINAL m
+ON u.managerId = m.id
+GROUP BY manager_name
+ORDER BY total_calls DESC
+
+──────────────────────────────────────────────────────────────────
+
+GONG ANALYTICAL INTENTS
+
+"call volume"
+"calls by rep"
+"average call duration"
+"total call time"
+"call activity"
+"rep productivity"
+"inbound vs outbound"
+"call trends"
+"manager call rollup"
+"inactive reps"
+
+Only use:
+
+* hs_analytics.go_calls
+* hs_analytics.go_users
+
+Do NOT reference:
+
+* go_extensiveCalls
+* competitor mentions
+* next steps
+* talk ratio
+* pricing trackers
+* objection trackers
+* sentiment analysis
+* call summaries
+
+These tables are not available in the current environment.
+
 
 =================================================================
 ASANA TABLES  (all in hs_analytics, ALWAYS use FINAL)
@@ -737,23 +819,6 @@ JOIN hs_analytics.deals FINAL d
   ON p.cf_record_id_es = toString(d.deal_id)
 WHERE <deals base filters>
 
-GONG + ASANA ANALYTICAL INTENTS:
-- "Call activity / insights for a deal"  → go_extensiveCalls by kore_employee_emailAddress
-- "Dark deals / no recent calls"         → deals vs go_extensiveCalls, no match in 30d
-- "Competitor mentions this quarter"     → go_extensiveCalls.content_tracker_Competitors_count
-- "Talk ratio / rep engagement"          → go_extensiveCalls.interaction_stat_Talk_Ratio
-- "Budget / pricing signals"             → tracker count columns in go_extensiveCalls
-- "Next steps from calls"                → go_extensiveCalls.content_highlight_Next_steps
-- "Rep call volume"                      → go_calls + go_users join on primaryUserId
-                                           If go_calls returns HTTP 500, try go_extensiveCalls with COUNT(*) GROUP BY kore_employee_emailAddress as fallback
-- "Scorecard questions"                  → go_scorecards by scorecardName
-- "Overdue tasks"                        → asana_tasks WHERE completed!='true' AND due_on < today
-- "Projects at risk / red RAG"           → asana_projects.cf_rag / cf_at_risk
-- "Renewal pipeline health"              → asana_projects cf_renewal_status + cf_arr
-- "CSM workload"                         → asana_projects GROUP BY cf_csm
-- "Deal → implementation status"         → asana_projects JOIN deals on cf_record_id_es
-- "Portfolio health"                     → asana_portfolio_project_association + project status
-- "Team task backlog"                    → asana_tasks → asana_project_task_association → project.team
 
 =================================================================
 MANDATORY BASE FILTERS (every deals query)
@@ -902,7 +967,7 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
             if is_gong_query:
                 return (
                     f"DATABASE ERROR: HTTP 500 on Gong table query (failed after {MAX_RETRIES} attempts). "
-                    f"The Gong tables (go_calls, go_calls_mv) appear to be unavailable — "
+                    f"The Gong tables (go_calls, go_users) appear to be unavailable"
                     f"this is a server-side infrastructure issue, not a query logic error. "
                     f"Check /debug/db to confirm Gong table connectivity. "
                     f"Raw error: {last_error[:300]}"
@@ -1109,7 +1174,7 @@ _DATA_QUESTION_PATTERNS = re.compile(
     r'closed|open|stall|value|amount|quota|target|coverage|'
     r'breakdown|summary|compare|which|who has|count|total|'
     r'conversion|drop.?off|revenue|forecast|'
-    r'gong|call|calls|scorecard|talk.?ratio|sentiment|competitor|'
+    r'gong|call|calls|rep.?performance|'
     r'next.?step|dark.?deal|no.?call|brief|rep.?performance|'
     r'asana|task|tasks|project|portfolio|overdue|backlog|assignee|'
     r'completion|due.?date|team.?workload|subtask)\b',
@@ -1184,6 +1249,9 @@ def _call_claude(messages: list, max_tokens: int = 8192,
             break
 
         sql          = tool_block.input.get("sql", "")
+        print("\n========== GENERATED SQL ==========")
+        print(sql)
+        print("===================================\n")
         query_result = run_clickhouse_query(sql, session_id=session_id)
         is_error     = any(query_result.startswith(p) for p in [
             "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
