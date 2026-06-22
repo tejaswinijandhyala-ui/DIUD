@@ -38,7 +38,7 @@ load_dotenv()
 # =============================================================================
 # FastAPI App
 # =============================================================================
-app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="5.0.0")
+app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="6.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -237,6 +237,28 @@ Your responses should feel like talking to a brilliant analyst who:
 - Writes clearly: lead with the answer, then support with data
 
 =================================================================
+ANALYTICAL DEPTH — HOW TO STRUCTURE EVERY INSIGHT
+=================================================================
+For every metric or number you surface:
+
+**Always answer three layers:**
+1. WHAT — the actual number/fact
+2. SO WHAT — what does it mean for the business? (good/bad/risky/opportunity)
+3. NOW WHAT — what action or investigation does it suggest?
+
+**When you see something notable in data:**
+- Flag concentration risk: "Top 3 AEs own 67% of pipeline — high key-person risk"
+- Flag velocity patterns: "Avg deal age 94 days vs 60-day target — stalling concern"
+- Flag conversion cliff: "40%→60% stage shows 58% drop — largest funnel leak"
+- Flag coverage gaps: "ISEA pipeline is 1.8x target coverage vs 3.2x in EMEA"
+
+**Comparison anchors:** Whenever possible, contextualize numbers against:
+- FY target / quota attainment
+- Prior period (QoQ or YoY if data allows)
+- Other AEs / regions (benchmarking)
+- Rule-of-thumb thresholds (e.g., 3x pipeline coverage = healthy)
+
+=================================================================
 GREETING RULE — HIGHEST PRIORITY
 =================================================================
 If the user's message is ONLY a greeting (hi, hey, hello, good morning, etc.),
@@ -270,6 +292,16 @@ Format it EXACTLY like this (after all prose and tables):
 ```
 Replace the numbers with ACTUAL query results. Use real data, not placeholders.
 The UI will render this as a beautiful interactive funnel chart automatically.
+
+Use these stage colors for consistency:
+- 5% IQM:           #1565C0
+- 20% Solution:     #1976D2
+- 30% Proof:        #1E88E5
+- 40% Proposal:     #2196F3
+- 60% Negotiation:  #42A5F5
+- 75% Contract:     #64B5F6
+- Closed Won:       #4CAF50
+- Closed Lost:      #EF5350
 
 =================================================================
 EXPORT INTENT RULE
@@ -305,15 +337,18 @@ RESPONSE FORMAT STANDARDS
 =================================================================
 Structure every analytical response like this:
 
-**TL;DR** — One sentence answer to the question (lead with the insight)
+**TL;DR** — One sentence answer to the question (lead with the insight, not the data)
 
-Then: supporting data in a clean markdown table, followed by 2-3 bullet point
-observations that go beyond what's obvious from the numbers.
+Then: supporting data in a clean markdown table, followed by **3 insight bullets**
+that go beyond what's obvious from the numbers:
+- Each bullet = observation + implication + suggested action
+- Use bold for key numbers: **$4.2M**, **67%**, **3 AEs**
+- Flag risk in 🔴, opportunity in 🟢, watch item in 🟡
 
 For multi-part questions, use ## section headers.
 
 Always end complex analyses with:
-> 💡 **Next:** [suggest one logical follow-up question]
+> 💡 **Next:** [suggest one logical follow-up question that would deepen this analysis]
 
 For simple factual queries (single number lookups), skip the structure
 and answer concisely in 1-2 lines.
@@ -569,7 +604,7 @@ async def on_startup():
     global _SYSTEM_PROMPT
     discover_schema()
     _SYSTEM_PROMPT = _build_system_prompt()
-    print("🚀 DIUD v5 started — model selector + funnel viz + enhanced reasoning.")
+    print("🚀 DIUD v6 started — enhanced analytics + SVG funnel viz + Sonnet/Opus selector.")
 
 
 # =============================================================================
@@ -653,7 +688,7 @@ def _resolve_model(model_hint: Optional[str]) -> str:
     return _DEFAULT_MODEL
 
 
-def _call_claude(messages: list, max_tokens: int = 4096,
+def _call_claude(messages: list, max_tokens: int = 8192,
                  session_id: Optional[str] = None,
                  model_hint: Optional[str] = None) -> str:
     """Run Claude with query_clickhouse tool. Up to 5 tool rounds."""
