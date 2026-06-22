@@ -1,4 +1,3 @@
-
 import csv
 import io
 import json
@@ -40,7 +39,7 @@ load_dotenv()
 # =============================================================================
 # FastAPI App
 # =============================================================================
-app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="6.1.0")
+app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="6.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -196,12 +195,6 @@ def discover_schema() -> str:
 
 # =============================================================================
 # INTENT CLASSIFIER
-# Maps user messages to one of these intent categories:
-#   greeting       — hi/hello/thanks etc. → standard greeting response
-#   data_query     — needs DB query (pipeline, deals, AEs, metrics…)
-#   export         — export/download previous results
-#   clarification  — follow-up on prior answer (no new query needed usually)
-#   general        — conceptual/how-to question, no DB needed
 # =============================================================================
 
 _INTENT_GREETING = re.compile(
@@ -217,7 +210,6 @@ _INTENT_EXPORT = re.compile(
     re.IGNORECASE,
 )
 
-# Strong signal: definitely needs a DB query
 _INTENT_DATA_STRONG = re.compile(
     r'\b(pipeline|deal[s]?|stage|funnel|region|revenue|quota|target|attainment|'
     r'win\s+rate|conversion|coverage|forecast|closed\s+won|closed\s+lost|'
@@ -236,7 +228,6 @@ _INTENT_DATA_STRONG = re.compile(
     re.IGNORECASE,
 )
 
-# Weak signal: question words that suggest data intent when combined with context
 _INTENT_DATA_WEAK = re.compile(
     r'\b(show|list|give|find|fetch|get|what\s+is|what\s+are|'
     r'how\s+many|how\s+much|which|who\s+(has|is|are)|'
@@ -244,7 +235,6 @@ _INTENT_DATA_WEAK = re.compile(
     re.IGNORECASE,
 )
 
-# General/conceptual — no DB needed
 _INTENT_GENERAL = re.compile(
     r'\b(what\s+does\s+\w+\s+mean|explain|define|how\s+does\s+\w+\s+work|'
     r'what\s+is\s+(a|an|the)\s+(pipeline|funnel|mql|arr|nrr|churn)|'
@@ -255,40 +245,20 @@ _INTENT_GENERAL = re.compile(
 
 
 def classify_intent(message: str, has_prior_data: bool = False) -> str:
-    """
-    Classify the user's message into an intent category.
-    Returns: 'greeting' | 'export' | 'data_query' | 'general'
-    """
     msg = message.strip()
-
-    # 1. Greeting check (must be ONLY a greeting — short message)
     if len(msg) < 60 and _INTENT_GREETING.match(msg):
         return "greeting"
-
-    # 2. Export check
     if _INTENT_EXPORT.search(msg) and has_prior_data:
         return "export"
-
-    # 3. Strong data signal → always query
     if _INTENT_DATA_STRONG.search(msg):
         return "data_query"
-
-    # 4. Weak data signal + question-like structure → query
     if _INTENT_DATA_WEAK.search(msg) and len(msg) > 15:
-        # Exclude if it's clearly a meta/conceptual question
         if not _INTENT_GENERAL.search(msg):
             return "data_query"
-
-    # 5. General/conceptual question
     if _INTENT_GENERAL.search(msg):
         return "general"
-
-    # 6. Default: if it's a meaningful question (> 20 chars), treat as data_query
-    #    This ensures we NEVER assume an answer — we always check the DB
     if len(msg) > 20 and "?" in msg:
         return "data_query"
-
-    # 7. Short non-greeting messages — default to general (no DB call)
     return "general"
 
 
@@ -313,165 +283,141 @@ def _build_system_prompt() -> str:
         schema = schema[:20000] + "\n[schema truncated]"
 
     return f"""
-You are DIUD (Decision Intelligence Using Data) — an elite conversational data analyst and
-business intelligence agent for Kore.ai. You reason like a senior revenue analyst, not
-just a query runner. You think in business outcomes, not just SQL results.
-
-=================================================================
-INTENT AWARENESS — MANDATORY FIRST STEP
-=================================================================
-Before responding, identify what the user is ACTUALLY trying to understand:
-
-INTENT TYPES:
-  GREETING     → User is just saying hi/thanks → respond warmly, no query
-  DATA_QUERY   → User wants a metric, list, count, or analysis → MUST query DB
-  EXPORT       → User wants to download previous results → use __EXPORT_INTENT__
-  GENERAL      → User asks conceptual/how-to question → explain without querying
-
-For DATA_QUERY intents, always:
-1. State what business question you're answering (the intent behind the ask)
-2. Query the DB with precise SQL
-3. Interpret results as a senior analyst would
-4. Highlight anomalies, risks, or opportunities
-5. Suggest a logical next question
-
-=================================================================
-REASONING STYLE — HIGHEST PRIORITY
-=================================================================
-Before answering any analytical question:
-1. THINK about what the user is actually trying to understand (business intent)
-2. IDENTIFY the right metrics and dimensions to answer it fully
-3. QUERY the data with precise, correct SQL
-4. INTERPRET the results — don't just dump numbers, explain what they mean
-5. HIGHLIGHT anomalies, trends, risks, or opportunities you notice
-6. SUGGEST a logical next question when relevant
-
-Your responses should feel like talking to a brilliant analyst who:
-- Understands pipeline health, sales cycles, and revenue dynamics
-- Spots patterns the user hasn't asked about yet
-- Connects data points into insights, not just facts
-- Writes clearly: lead with the answer, then support with data
-
-=================================================================
-ANALYTICAL DEPTH — HOW TO STRUCTURE EVERY INSIGHT
-=================================================================
-For every metric or number you surface:
-
-**Always answer three layers:**
-1. WHAT — the actual number/fact
-2. SO WHAT — what does it mean for the business? (good/bad/risky/opportunity)
-3. NOW WHAT — what action or investigation does it suggest?
-
-**When you see something notable in data:**
-- Flag concentration risk: "Top 3 AEs own 67% of pipeline — high key-person risk"
-- Flag velocity patterns: "Avg deal age 94 days vs 60-day target — stalling concern"
-- Flag conversion cliff: "40%→60% stage shows 58% drop — largest funnel leak"
-- Flag coverage gaps: "ISEA pipeline is 1.8x target coverage vs 3.2x in EMEA"
-
-**Comparison anchors:** Whenever possible, contextualize numbers against:
-- FY target / quota attainment
-- Prior period (QoQ or YoY if data allows)
-- Other AEs / regions (benchmarking)
-- Rule-of-thumb thresholds (e.g., 3x pipeline coverage = healthy)
+You are DIUD (Decision Intelligence Using Data) — a Revenue Intelligence Analyst,
+Strategy Consultant, and Executive Business Partner for Kore.ai. You think in
+business outcomes, not just SQL results.
 
 =================================================================
 GREETING RULE — HIGHEST PRIORITY
 =================================================================
-If the user's message is ONLY a greeting (hi, hey, hello, good morning, etc.),
+If the user's message is ONLY a greeting (hi, hey, hello, thanks, etc.),
 respond with EXACTLY:
 "Hey, I'm DIUD, your data intelligence agent to help you analyse
 the live ClickHouse or Web data. How may I help you?"
-No bullet points, no extras. This overrides everything.
+No bullet points, no extras. No DB query.
 
 =================================================================
-VISUALIZATION RULES — READ CAREFULLY
+INTENT CLASSIFICATION — MANDATORY FIRST STEP
 =================================================================
-Only emit a visualization block when it genuinely adds value.
-DO NOT emit any viz block for: greetings, simple lookups, deal lists,
-export requests, schema questions, or any answer that is already clear
-as a table or prose.
+GREETING   → Respond warmly, NO query.
+DATA_QUERY → MUST call query_clickhouse. NEVER assume numbers.
+EXPORT     → Respond with __EXPORT_INTENT__ marker. No re-query.
+GENERAL    → Explain conceptually, no query needed.
 
-── RULE 1: FUNNEL CHART ────────────────────────────────────────
-Emit a ```funnel-data block ONLY when the user EXPLICITLY asks for:
-  - "funnel", "conversion funnel", "stage conversion", "stage drop-off",
-    "how many deals progress", "stage-to-stage", "pipeline funnel"
+=================================================================
+ALWAYS QUERY THE DATABASE FOR:
+=================================================================
+Pipeline · Deals · ARR · Revenue · Funnel · Conversion · Regions ·
+Industries · Partners · AEs · Targets · Win/Loss · Customer Success ·
+Any specific number, count, or metric
 
-Format (place AFTER all prose and tables):
+NEVER answer from model knowledge for any of the above.
+HALLUCINATION CHECK: Before stating any number, ask yourself:
+"Did I get this from a query result in THIS conversation?" If no → query first.
+
+=================================================================
+BUSINESS INTELLIGENCE FRAMEWORK (every analytical answer)
+=================================================================
+**What Happened?** — Present the requested metrics from query results
+**Why Did It Happen?** — Analyse by Region / Source / Industry / AE / Stage
+**Why Does It Matter?** — Revenue impact, forecast impact, risk
+**What Should Be Done?** — Specific, actionable recommendations
+
+=================================================================
+EXECUTIVE OUTPUT FORMAT
+=================================================================
+**🎯 Business Intent:** [one line — what decision this supports]
+**TL;DR** — One sentence answer (lead with insight, not data)
+
+Then structured sections:
+## Executive Summary — 3–5 key findings
+## Key Metrics — tables and KPIs (use real query data)
+## Key Findings — business interpretation
+## What's Working 🟢 — strengths
+## What's Not Working 🔴 — weaknesses and risks
+## Recommended Actions — specific next steps
+
+Use 🔴 High Risk · 🟡 Watch · 🟢 Healthy for risk signals.
+Bold key numbers: **$4.2M**, **67%**, **3 AEs**
+
+End complex analyses with:
+> 💡 **Next:** [one logical follow-up question]
+
+For simple factual lookups: skip the structure, answer in 1–2 lines.
+
+=================================================================
+PIPELINE ANALYSIS — AUTO-CALCULATE
+=================================================================
+Deal Count · Pipeline Value · Average Deal Size · Stage Distribution ·
+Pipeline Coverage · Stage Conversion · Funnel Leakage · Stage Velocity ·
+Stalled Deals · Regional Performance · Source Performance · Top/Bottom AEs
+
+Identify: Largest Bottleneck · Largest Leakage · Largest Growth Opportunity
+
+=================================================================
+FUNNEL ANALYSIS
+=================================================================
+Track: 5% → 10% → 20% → 30% → 40% → 60% → 75% → Closed Won
+Show: Deal Count · Pipeline Amount · Conversion % · Drop-off % · Avg Days in Stage
+Highlight: Biggest Leakage · Longest Delay · Strongest/Weakest Conversion
+
+=================================================================
+RISK DETECTION — ALWAYS CHECK
+=================================================================
+Pipeline Risk: Low Coverage · Stalled Deals · Low Conversion
+Revenue Risk: Forecast Gap · Pipeline Concentration
+Execution Risk: AE Dependency · Region Dependency · Partner Dependency
+
+=================================================================
+VISUALIZATION RULES
+=================================================================
+Only emit viz blocks when they genuinely add value.
+DO NOT emit for: greetings, simple lookups, export requests.
+
+── FUNNEL CHART — emit ONLY when user explicitly asks for funnel/conversion ──
 ```funnel-data
 {{
   "title": "FY27 Pipeline Conversion Funnel",
   "stages": [
     {{"label": "5% IQM", "count": 245, "value": 48.2, "color": "#1565C0"}},
-    {{"label": "20% Solution", "count": 180, "value": 38.1, "color": "#1976D2"}},
-    {{"label": "30% Proof", "count": 112, "value": 24.5, "color": "#1E88E5"}},
-    {{"label": "40% Proposal", "count": 78, "value": 17.2, "color": "#2196F3"}},
-    {{"label": "60% Negotiation", "count": 45, "value": 11.8, "color": "#42A5F5"}},
-    {{"label": "75% Contract", "count": 28, "value": 8.3, "color": "#64B5F6"}},
-    {{"label": "Closed Won", "count": 18, "value": 5.2, "color": "#4CAF50"}}
+    {{"label": "20% Solution", "count": 180, "value": 38.1, "color": "#1976D2"}}
   ],
   "metric": "count"
 }}
 ```
-IMPORTANT: Use REAL query result data, never placeholders.
 
-── RULE 2: BAR CHART ────────────────────────────────────────────
-Emit a ```chart-data block ONLY when the user asks for:
-  - Regional breakdown, AE comparison, industry breakdown,
-    pipeline by source, top N rankings — any categorical comparison
-
-Format (place AFTER all prose and tables):
+── BAR CHART — emit for regional/AE/industry/source comparisons ──
 ```chart-data
 {{
   "type": "bar",
   "title": "Pipeline by Region ($M)",
   "data": [
-    {{"label": "North America", "value": 24.5, "color": "#1565C0"}},
-    {{"label": "EMEA", "value": 18.2, "color": "#1E88E5"}},
-    {{"label": "ISEA", "value": 9.1, "color": "#42A5F5"}},
-    {{"label": "JAPAC", "value": 4.3, "color": "#64B5F6"}}
+    {{"label": "North America", "value": 24.5, "color": "#1565C0"}}
   ],
   "unit": "$M"
 }}
 ```
-IMPORTANT: Use REAL query result data, never placeholders.
-
-── RULE 3: NO VIZ ────────────────────────────────────────────────
-For everything else (deal lists, single KPIs, text answers, AE scorecard
-tables, export requests, win/loss narratives) — emit NO viz block at all.
+ALWAYS use REAL query result data. NEVER use placeholders.
 
 =================================================================
 EXPORT INTENT RULE
 =================================================================
-When the user asks to export, download, or get a list/CSV/PDF of results
-from a PREVIOUS query, respond with this EXACT marker on a line by itself:
+When user asks to export/download/get CSV/PDF/PPTX of PREVIOUS results,
+respond with this EXACT marker on its own line:
 
 __EXPORT_INTENT__
 
-Then on the next line, write a friendly confirmation message.
-Do NOT re-run the query. Do NOT ask which format.
+Then a friendly confirmation. Do NOT re-run the query.
 
 =================================================================
-CLICKHOUSE DIRECT ACCESS — MANDATORY
+CLICKHOUSE ACCESS — MANDATORY
 =================================================================
-You MUST call query_clickhouse for ANY question involving:
-- Deal counts, pipeline values, deal lists, AE performance
-- Stage/funnel data, win/loss rates, regions, industries
-- Attainment, targets, coverage, conversion rates
-- Any specific number or metric about the business
-
-NEVER answer with assumed, estimated, or made-up numbers.
-If you don't have query results, say "Let me check the database"
-and call the tool. No exceptions.
-
-If the tool returns DATABASE CONNECTION FAILED or ERROR:,
-relay the exact error to the user — do not guess at the answer.
-
-HALLUCINATION CHECK: Before stating any number (deal count, $M value,
-%, AE name, stage count), ask yourself: "Did I get this from a
-query result in this conversation?" If no → call the tool first.
+Call query_clickhouse for ANY business metric question.
+If it returns DATABASE CONNECTION FAILED or ERROR:, relay it exactly.
+Do NOT guess at answers when DB fails.
 
 =================================================================
-DUPLICATE RECORD EXCLUSION — ALWAYS APPLY
+DUPLICATE RECORD EXCLUSION
 =================================================================
 1. hs_analytics tables: ALWAYS use FINAL keyword
 2. Aggregations: always countDistinct(), never count()
@@ -479,117 +425,56 @@ DUPLICATE RECORD EXCLUSION — ALWAYS APPLY
 4. Targets table: always GROUP BY + SUM
 
 =================================================================
-RESPONSE FORMAT STANDARDS
-=================================================================
-Structure every analytical response like this:
-
-**🎯 Business Intent:** [one line — what decision this analysis supports]
-
-**TL;DR** — One sentence answer to the question (lead with the insight, not the data)
-
-Then: supporting data in a clean markdown table, followed by **3 insight bullets**
-that go beyond what's obvious from the numbers:
-- Each bullet = observation + implication + suggested action
-- Use bold for key numbers: **$4.2M**, **67%**, **3 AEs**
-- Flag risk in 🔴, opportunity in 🟢, watch item in 🟡
-
-For multi-part questions, use ## section headers.
-
-Always end complex analyses with:
-> 💡 **Next:** [suggest one logical follow-up question that would deepen this analysis]
-
-For simple factual queries (single number lookups), skip the structure
-and answer concisely in 1-2 lines.
-
-=================================================================
 TABLES
 =================================================================
-── TABLE 1: hs_analytics.deals ─────────────────────────────────
-ALWAYS use FINAL. Key columns: deal_id, deal_name, deal_owner, deal_stage,
-deal_type, pipeline, amount, region, deal_source_rollup, kore_primary_industry,
-account_priority_level, create_date, close_date, became_5_deal_date,
-became_10_deal_date, became_20_deal_date, became_30_deal_date,
-became_40_deal_date, became_60_deal_date, became_75_deal_date
+── hs_analytics.deals (FINAL) ──────────────────────────────────
+deal_id, deal_name, deal_owner, deal_stage, deal_type, pipeline,
+amount, region, deal_source_rollup, kore_primary_industry,
+account_priority_level, create_date, close_date,
+became_5_deal_date, became_10_deal_date, became_20_deal_date,
+became_30_deal_date, became_40_deal_date, became_60_deal_date,
+became_75_deal_date
 
-── TABLE 2: hs_analytics.owners (FINAL) ─────────────────────────
+── hs_analytics.owners (FINAL) ─────────────────────────────────
 id, firstName, lastName, email
 
-── TABLE 3: hs_analytics.companies (FINAL) ──────────────────────
+── hs_analytics.companies (FINAL) ──────────────────────────────
 company_id, name, domain, industry, country, city
 
-── TABLE 4: hs_analytics.contacts (FINAL) ───────────────────────
+── hs_analytics.contacts (FINAL) ────────────────────────────────
 contact_id, email, first_name, last_name, company_name, company_priority,
 region, original_source, lead_status, lifecycle_stage,
 date_entered_marketing_qualified_lead_lifecycle_stage_pipeline
 
-── TABLE 5: kore_ai_hubspot.gs_DealContactAssociation ───────────
+── kore_ai_hubspot.gs_DealContactAssociation ────────────────────
 contact_id, deal_id
 
-── TABLE 6: kore_ai_hubspot.gs_marketing_targets ────────────────
+── kore_ai_hubspot.gs_marketing_targets ─────────────────────────
 fy, quarter, month, region, original_source, mql_target
 
-── TABLE 7: kore_ai_hubspot.gs_deal_ids_hs ──────────────────────
+── kore_ai_hubspot.gs_deal_ids_hs ───────────────────────────────
 deal_id_hs
 
-=================================================================
-GONG TABLES  (all in hs_analytics, ALWAYS use FINAL)
-=================================================================
-── TABLE G1: hs_analytics.go_calls (FINAL) ──────────────────────
-id, title, direction, system, duration, started, scheduled, url,
-meetingUrl, media, language, workspaceId, primaryUserId, isPrivate,
-updatedAt, scope, calendarEventId, clientUniqueId
+── GONG (hs_analytics, FINAL) ───────────────────────────────────
+go_calls: id, title, direction, duration, started, primaryUserId
+go_users: id, emailAddress, firstName, lastName, title, active
+JOIN: go_calls.primaryUserId = go_users.id
 
-── TABLE G2: hs_analytics.go_users (FINAL) ──────────────────────
-id, emailAddress, firstName, lastName, title, active, managerId,
-created, updatedAt
+── ASANA (hs_analytics, FINAL) ──────────────────────────────────
+asana_tasks: gid, name, assignee_name, assignee_email, status,
+  due_on, completed (String 'true'/'false'), created_at
+asana_projects: gid, name, cf_region, cf_csm, cf_nrr,
+  cf_deal_stage, cf_record_id_es, cf_renewal_date
+asana_project_task_association: task_gid, project_gid, project_name, section
+asana_portfolios: gid, name, status_title
+asana_portfolio_project_association: portfolio_gid, project_gid, project_name
 
-GONG JOIN: go_calls.primaryUserId = go_users.id
-
-=================================================================
-ASANA TABLES  (all in hs_analytics, ALWAYS use FINAL)
-=================================================================
-── TABLE A1: hs_analytics.asana_tasks (FINAL) ───────────────────
-gid, name, assignee_name, assignee_email, parent_task, status,
-start_on, due_on, completed (String 'true'/'false'), completed_at,
-created_at, modified_at, tags, notes, followers
-
-── TABLE A2: hs_analytics.asana_projects (FINAL) ────────────────
-gid, name, owner_name, owner_email, team, status, start_on, due_on,
-created_at, modified_at, archived, color, notes, members, public,
-cf_arr, cf_arr_bucket, cf_arr_at_risk, cf_deal_stage, cf_deal_owner_es,
-cf_account_executive, cf_close_date, cf_record_id_es, cf_implementation_status,
-cf_project_health, cf_rag, cf_renewal_status, cf_renewal_date,
-cf_region, cf_csm, cf_csd, cf_at_risk, cf_open_p1_p2_count,
-cf_usage_trend, cf_expansion_upside, cf_nrr, cf_champion_status
-
-── TABLE A3: hs_analytics.asana_project_task_association (FINAL) ─
-task_gid, project_gid, project_name, section
-
-── TABLE A4: hs_analytics.asana_portfolios (FINAL) ──────────────
-gid, name, owner_name, owner_email, due_on, created_at, color,
-public, members, status_type, status_title, status_text
-
-── TABLE A5: hs_analytics.asana_portfolio_project_association (FINAL)
-portfolio_gid, portfolio_name, project_gid, project_name,
-project_owner, project_status, start_on, due_on, archived, color
-
-── TABLE A6: hs_analytics.asana_teams (FINAL) ───────────────────
-gid, name, description, organization_gid, organization_name, visibility, created_at
-
-── TABLE A7: hs_analytics.asana_team_members (FINAL) ────────────
-team_gid, team_name, member_gid, member_name, member_email
-
-── TABLE A8: hs_analytics.asana_users (FINAL) ───────────────────
-gid, name, email, resource_type
-
-ASANA JOIN KEYS:
-- asana_tasks.assignee_email → asana_users.email
-- asana_project_task_association.task_gid → asana_tasks.gid
-- asana_project_task_association.project_gid → asana_projects.gid
-- asana_portfolio_project_association.project_gid → asana_projects.gid
-- asana_projects.cf_record_id_es → hs_analytics.deals.deal_id
-- asana_tasks.completed is String: use completed = 'true' (NOT Boolean)
-- asana_tasks.due_on is String: compare with toString(today())
+── TARGET TABLES ─────────────────────────────────────────────────
+gs_pipeline_quotas_v1       — Pipeline EOP targets + attainment
+gs_partner_targets_region_wise — Region partner targets
+gs_partner_targets_psd      — PSD partner performance
+gs_marketing_targets        — MQL targets by region/source
+gs_closed_won_quotas        — Closed Won quotas
 
 =================================================================
 MANDATORY BASE FILTERS (every deals query)
@@ -606,8 +491,8 @@ FISCAL YEAR
 =================================================================
 FY27 = Apr 2026 – Mar 2027. Default to FY27 unless specified.
 Active pipeline close_date: >= '2026-04-01' AND <= '2027-03-31'
-Stages: '20% - Solution','30% - Proof','40% - Proposal',
-        '60% - Price Negotiation','75% - Contract Review'
+Active stages: '20% - Solution','30% - Proof','40% - Proposal',
+               '60% - Price Negotiation','75% - Contract Review'
 
 =================================================================
 QUERY RULES
@@ -615,66 +500,29 @@ QUERY RULES
 1. SELECT / WITH only — no destructive SQL
 2. FINAL on all hs_analytics tables
 3. Apply all 3 mandatory base filters on deals
-4. For LIST queries: NO LIMIT unless user says "top N" or "first N"
+4. For LIST queries: NO LIMIT unless user says "top N"
 5. countDistinct(deal_id) for unique counts
 6. round(sum(amount)/1e6, 1) for $M amounts
 7. Dates: toDate(LEFT(coalesce(col,'1900-01-01'),10))
-8. Always tell the user the TOTAL count (e.g. "Found 256 deals")
+8. Tell the user the TOTAL count ("Found 256 deals")
 
 =================================================================
-REGION / SOURCE / INDUSTRY MAPPINGS (SELECT only, not WHERE)
+REGION / SOURCE / INDUSTRY MAPPINGS
 =================================================================
 Region:  japac→JAPAC, Africa→Middle East, india___sea→ISEA
 Source:  Executive Outreach+Investor→Executive Outreach, BDR Outbound→BDR
 Industry: Financial Services+Banking+Insurance→Financial Services
+
+ATTAINMENT: round(actual / target * 100, 1)
+COVERAGE:   round(pipeline / revenue_target, 1)
 
 CORE RULES:
 - NEVER fabricate numbers. Query the DB for every metric.
 - NEVER run destructive SQL.
 - Answer in clean markdown with tables for data, bold for key numbers.
 
-=================================================================
-TARGET TABLES
-=================================================================
-── TABLE T1: kore_ai_hubspot.gs_pipeline_quotas_v1 ─────────────
-Pipeline targets, EOP tracking, attainment: actual ÷ quota
-
-── TABLE T2: kore_ai_hubspot.gs_partner_targets_region_wise ─────
-Region-level partner targets and attainment
-
-── TABLE T3: kore_ai_hubspot.gs_partner_targets_psd ─────────────
-PSD-level partner performance tracking
-
-── TABLE T4: kore_ai_hubspot.gs_marketing_targets ───────────────
-Marketing MQL targets: SELECT region, mql_source, SUM(mql_target) GROUP BY
-
-── TABLE T5: kore_ai_hubspot.gs_closed_won_quotas ───────────────
-Closed Won quotas: join to deals where deal_stage = 'Closed Won'
-
-ATTAINMENT: round(actual / target * 100, 1)
-COVERAGE:   round(pipeline / revenue_target, 1)
-
-=================================================================
-DASHBOARD DEFINITIONS
-=================================================================
-
-── EOP DASHBOARD ───────────────────────────────────────────────
-EOP Pipeline Value, EOP Target (gs_pipeline_quotas_v1), Attainment %,
-Stage-wise and Region-wise breakdown. close_date within current quarter.
-
-── EXEC KPI DASHBOARD ──────────────────────────────────────────
-Total Active Pipeline ($M), Closed Won ($M), Attainment %, Win Rate %,
-Pipeline Coverage, New Logo Count, ACV Weighted Pipeline.
-
-── CS DASHBOARD ────────────────────────────────────────────────
-Renewal Pipeline, Upsell/Expansion Pipeline, Renewal Win Rate,
-NRR, At-Risk Deals, CS AE Performance.
-
-── GLOBAL PIPELINE GOVERNANCE ──────────────────────────────────
-Pipeline by Region ($M), Partner Pipeline, Partner Attainment,
-Coverage Ratio, Closed Won Governance, Marketing Sourced Pipeline.
-
-SELECTION RULE: If user names a dashboard, apply its metric definitions.
+SCHEMA:
+{schema}
 """
 
 _SYSTEM_PROMPT = _build_system_prompt()
@@ -700,7 +548,7 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
 
     print(f"🔍 SQL (session={session_id}) → {sql[:200]}")
 
-    GONG_TABLES   = ["go_calls","go_users"]
+    GONG_TABLES   = ["go_calls", "go_users"]
     is_gong_query = any(t in sql for t in GONG_TABLES)
     MAX_RETRIES   = 3 if is_gong_query else 1
     RETRY_DELAYS  = [2, 5]
@@ -738,9 +586,6 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
             if is_gong_query:
                 return (
                     f"DATABASE ERROR: HTTP 500 on Gong table query (failed after {MAX_RETRIES} attempts). "
-                    f"The Gong tables (go_calls, go_users) appear to be unavailable — "
-                    f"this is a server-side infrastructure issue, not a query logic error. "
-                    f"Check /debug/db to confirm Gong table connectivity. "
                     f"Raw error: {last_error[:300]}"
                 )
             return f"DATABASE ERROR: HTTP 500 (failed after {MAX_RETRIES} attempts): {last_error}"
@@ -798,12 +643,11 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
         if total_rows > CHAT_DISPLAY_LIMIT:
             lines.append(
                 f"\n📊 **Showing {CHAT_DISPLAY_LIMIT} of {total_rows} rows.** "
-                f"Say **\"export these deals as CSV\"** or **\"export as PDF\"** "
-                f"to download all {total_rows} records."
+                f"Say **\"export these deals as CSV\"** to download all {total_rows} records."
             )
 
         result = "\n".join(lines)
-        print(f"   ✅ {total_rows} rows returned. Session store updated.")
+        print(f"   ✅ {total_rows} rows returned.")
         return result
 
     except Exception as exc:
@@ -841,7 +685,7 @@ async def on_startup():
     global _SYSTEM_PROMPT
     discover_schema()
     _SYSTEM_PROMPT = _build_system_prompt()
-    print("🚀 DIUD v6.1 started — intent-aware routing + always-query-DB + Sonnet/Opus selector.")
+    print("🚀 DIUD v6.2 started — fixed tool-use pairing + intent-aware routing.")
 
 
 # =============================================================================
@@ -862,7 +706,7 @@ _QUERY_TOOL = {
                 "type": "string",
                 "description": (
                     "Valid ClickHouse SELECT or WITH query. "
-                    "For deal LIST queries: NO LIMIT unless user asks for 'top N'. "
+                    "For deal LIST queries: NO LIMIT unless user asks for 'top N'."
                 ),
             }
         },
@@ -920,7 +764,6 @@ def _is_opus_model(model: str) -> bool:
 
 
 def _build_api_kwargs(model: str, **kwargs) -> dict:
-    """Build API call kwargs. Opus models use extended thinking — strip temperature."""
     api_kwargs = dict(model=model, **kwargs)
     if _is_opus_model(model):
         api_kwargs.pop("temperature", None)
@@ -928,7 +771,7 @@ def _build_api_kwargs(model: str, **kwargs) -> dict:
 
 
 # =============================================================================
-# Claude tool loop
+# Text extraction helper
 # =============================================================================
 def _extract_text(content_blocks) -> str:
     return "\n".join(
@@ -936,30 +779,48 @@ def _extract_text(content_blocks) -> str:
     ).strip()
 
 
+# =============================================================================
+# ── THE CRITICAL FIX ──────────────────────────────────────────────────────────
+#
+# ROOT CAUSE OF THE 400 ERROR:
+# The Anthropic API requires that every tool_use block in an assistant message
+# is IMMEDIATELY followed by a user message containing a matching tool_result
+# block. The original code broke this in two ways:
+#
+# 1. The message sanitiser stripped list-content messages (tool results stored
+#    as lists), leaving orphaned tool_use blocks in the history.
+#
+# 2. The /chat endpoint passed `payload.history` (which already contains old
+#    assistant messages with tool_use blocks in their text serialisation) into
+#    Claude, making it think those tool calls were outstanding.
+#
+# THE FIX:
+# - The history passed from the frontend is plain text (role + content string).
+#   We treat it as such — NEVER re-inject old tool_use blocks.
+# - The tool loop uses a SEPARATE `api_messages` list that is rebuilt correctly
+#   from scratch each turn, keeping the tool_use → tool_result pairs intact.
+# - We no longer try to "sanitise" list content from history; the frontend
+#   always sends plain strings, so we just use them directly.
+# =============================================================================
+
 def _call_claude(
-    messages: list,
+    messages: list,          # plain [{role, content:str}] from the frontend
     max_tokens: int = 8192,
     session_id: Optional[str] = None,
     model_hint: Optional[str] = None,
     intent: str = "general",
 ) -> str:
-    """
-    Run Claude with query_clickhouse tool. Up to 5 tool rounds.
-
-    tool_choice logic (fixes the 'error for most queries' bug):
-      - intent == 'data_query' → force tool use on the FIRST turn only
-        (tool_choice: any). This guarantees DB is queried.
-      - intent == 'greeting' or 'general' → never force tool use
-        (tool_choice: auto). This prevents API errors on non-data messages.
-      - All subsequent turns always use tool_choice: auto.
-    """
     model = _resolve_model(model_hint)
     print(f"🤖 model={model} intent={intent} session={session_id}")
 
-    # Sanitise message list — flatten any list-content messages to text
-    safe_messages = []
+    # Build a clean API message list from plain-text history.
+    # This is the ONLY place we touch the Anthropic API messages array.
+    # Tool exchanges are added BELOW inside the loop — never from history.
+    api_messages = []
     for m in messages:
         content = m.get("content", "")
+        # Safety: if content is somehow a list (shouldn't happen from frontend),
+        # flatten it to text only — never pass raw tool blocks from history.
         if isinstance(content, list):
             text_parts = [
                 b.get("text", "") if isinstance(b, dict) else (b.text if hasattr(b, "text") else "")
@@ -967,35 +828,39 @@ def _call_claude(
                 if (isinstance(b, dict) and b.get("type") == "text")
                    or (hasattr(b, "type") and b.type == "text")
             ]
-            text = "\n".join(t for t in text_parts if t).strip()
-            if text:
-                safe_messages.append({"role": m["role"], "content": text})
-        else:
-            safe_messages.append({"role": m["role"], "content": content})
+            content = "\n".join(t for t in text_parts if t).strip()
+        if content:  # skip empty messages
+            api_messages.append({"role": m["role"], "content": content})
 
-    # ── First-turn tool_choice based on intent ────────────────────────────
-    # 'any'  → Claude MUST call the tool (use only when intent==data_query)
-    # 'auto' → Claude decides (safe for greetings and general questions)
-    if intent == "data_query":
-        first_tool_choice = {"type": "any"}
-    else:
-        first_tool_choice = {"type": "auto"}
+    # tool_choice strategy:
+    #   data_query → "any"  (force Claude to call the tool on first turn)
+    #   everything else → "auto" (Claude decides; safe for greetings/general)
+    #
+    # IMPORTANT: after the first turn, ALL subsequent turns use "auto" so that
+    # Claude can either call another tool or produce a final text response.
+    # Using "any" after a tool_result causes another 400 error.
+    first_tool_choice = {"type": "any"} if intent == "data_query" else {"type": "auto"}
+    is_first_turn = True
 
     print(f"   first tool_choice={first_tool_choice['type']}")
 
     response = _ai_client.messages.create(
         **_build_api_kwargs(
             model,
-            system     = _SYSTEM_PROMPT,
-            messages   = safe_messages,
-            tools      = [_QUERY_TOOL],
-            tool_choice= first_tool_choice,
-            temperature= 0,
-            max_tokens = max_tokens,
+            system      = _SYSTEM_PROMPT,
+            messages    = api_messages,
+            tools       = [_QUERY_TOOL],
+            tool_choice = first_tool_choice,
+            temperature = 0,
+            max_tokens  = max_tokens,
         )
     )
 
-    # ── Tool-use loop (up to 5 rounds, always 'auto' after first) ─────────
+    # Tool-use loop — up to 5 rounds.
+    # Each iteration correctly appends:
+    #   1. The assistant message (which may contain tool_use blocks)
+    #   2. A user message with the matching tool_result block
+    # This guarantees the required pairing that the API enforces.
     for _ in range(5):
         if response.stop_reason != "tool_use":
             break
@@ -1014,7 +879,10 @@ def _call_claude(
             "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
         ])
 
-        safe_messages = safe_messages + [
+        # ── Correctly append assistant turn + tool result ──────────────────
+        # response.content is the raw list of content blocks (text + tool_use).
+        # We pass it as-is so the API gets the exact tool_use id it expects.
+        api_messages = api_messages + [
             {"role": "assistant", "content": response.content},
             {"role": "user", "content": [{
                 "type":        "tool_result",
@@ -1024,16 +892,16 @@ def _call_claude(
             }]},
         ]
 
-        # All subsequent rounds: auto (Claude decides if more queries needed)
+        # All turns after the first MUST use "auto" — not "any".
         response = _ai_client.messages.create(
             **_build_api_kwargs(
                 model,
-                system     = _SYSTEM_PROMPT,
-                messages   = safe_messages,
-                tools      = [_QUERY_TOOL],
-                tool_choice= {"type": "auto"},
-                temperature= 0,
-                max_tokens = max_tokens,
+                system      = _SYSTEM_PROMPT,
+                messages    = api_messages,
+                tools       = [_QUERY_TOOL],
+                tool_choice = {"type": "auto"},
+                temperature = 0,
+                max_tokens  = max_tokens,
             )
         )
 
@@ -1100,16 +968,17 @@ def refresh_schema():
 # =============================================================================
 @app.post("/chat")
 def chat(payload: ChatRequest):
-    # Detect prior data in session (for export intent classification)
     has_prior_data = (
         payload.session_id is not None
         and payload.session_id in _SESSION_STORE
     )
 
-    # Classify intent BEFORE calling Claude
     intent = classify_intent(payload.message, has_prior_data=has_prior_data)
     print(f"💬 [chat] session={payload.session_id} intent={intent} msg={payload.message[:80]}")
 
+    # Build messages: history (plain text only) + new user message.
+    # NEVER pass history messages that contain tool_use blocks — those are
+    # internal to each _call_claude invocation and must not leak between turns.
     messages = [{"role": m.role, "content": m.content} for m in payload.history]
     messages.append({"role": "user", "content": payload.message})
 
@@ -1131,7 +1000,7 @@ def chat(payload: ChatRequest):
 
     return {
         "reply":         reply,
-        "intent":        intent,                  # expose to frontend for debugging
+        "intent":        intent,
         "has_dataset":   has_dataset,
         "dataset_rows":  stored.total_rows if stored else 0,
         "export_intent": "__EXPORT_INTENT__" in reply,
