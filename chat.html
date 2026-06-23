@@ -313,6 +313,11 @@
     .chat-md th { background: var(--navy); color: white; padding: 8px 12px; text-align: left; font-weight: 600; }
     .chat-md td { padding: 7px 12px; border-bottom: 1px solid var(--border); }
     .chat-md tr:nth-child(even) td { background: #F8FAFC; }
+    .chat-md .inline-visual {
+  margin: 10px 0;
+  border-radius: 12px;
+  overflow: hidden;
+}
 
     /* ── Typing indicator ────────────────────────────────────────────────── */
     .typing-indicator { display: flex; gap: 5px; padding: 12px 16px; align-items: center; }
@@ -351,6 +356,38 @@
     #send-btn:disabled { opacity: .4; cursor: not-allowed; }
     #send-btn svg { width: 18px; height: 18px; }
     .input-hint { font-size: 11px; color: var(--txt-dim); }
+        .model-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px 4px 8px; border-radius: 20px;
+      border: 1.5px solid var(--border); background: var(--card);
+      cursor: pointer; transition: all .15s; position: relative;
+      font-size: 12px; font-weight: 500; color: var(--txt-mid);
+      user-select: none;
+    }
+    .model-pill:hover { border-color: var(--accent); color: var(--accent); background: var(--blue-lt); }
+    .model-pill .model-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--accent); }
+    .model-pill.opus .model-dot { background: #7C3AED; }
+    .model-pill.opus { color: #7C3AED; border-color: #DDD6FE; }
+    .model-pill.opus:hover { background: #F5F3FF; border-color: #7C3AED; }
+
+    .model-dropdown {
+      position: absolute; bottom: calc(100% + 8px); left: 0;
+      background: var(--card); border: 1.5px solid var(--border);
+      border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,.12);
+      padding: 6px; min-width: 220px; z-index: 500;
+      display: none;
+    }
+    .model-dropdown.open { display: block; }
+
+    .model-option {
+      display: flex; flex-direction: column; gap: 2px;
+      padding: 9px 12px; border-radius: 7px; cursor: pointer; transition: background .12s;
+    }
+    .model-option:hover { background: var(--bg); }
+    .model-option.active { background: var(--blue-lt); }
+    .model-option-name { font-size: 12.5px; font-weight: 600; color: var(--txt-main); display: flex; align-items: center; gap: 6px; }
+    .model-option-desc { font-size: 11px; color: var(--txt-dim); }
+
 
     /* ── Toast ───────────────────────────────────────────────────────────── */
     #toast {
@@ -691,18 +728,46 @@
 
     <div class="input-area">
       <div class="input-row">
-        <textarea id="chat-input" rows="1"
-          placeholder="Ask about pipeline, deals, AEs, win rates… or say 'export as PDF'"
-          onkeydown="handleKey(event)"></textarea>
-        <button id="send-btn" onclick="send()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-            <line x1="22" y1="2" x2="11" y2="13"/>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-          </svg>
-        </button>
-      </div>
-      <div class="input-hint">Enter to send · Shift+Enter for new line</div>
+  <div style="position:relative;">
+    <div class="model-pill" id="model-pill" onclick="toggleModelDropdown()">
+      <span class="model-dot"></span>
+      <span id="model-pill-label">Sonnet</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+           style="width:11px;height:11px;opacity:.6"><polyline points="6 9 12 15 18 9"/></svg>
     </div>
+    <div class="model-dropdown" id="model-dropdown">
+      <div class="model-option active" id="opt-sonnet" onclick="selectModel('sonnet')">
+        <div class="model-option-name">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+               style="width:13px;height:13px;color:var(--accent)">
+            <circle cx="12" cy="12" r="10"/><polyline points="20 6 9 17 4 12"/>
+          </svg>
+          claude-sonnet-4-5
+        </div>
+        <div class="model-option-desc">Fast · Best for most queries</div>
+      </div>
+      <div class="model-option" id="opt-opus" onclick="selectModel('opus')">
+        <div class="model-option-name" style="color:#7C3AED;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#7C3AED" stroke-width="2.5"
+               style="width:13px;height:13px;opacity:0">
+            <circle cx="12" cy="12" r="10"/><polyline points="20 6 9 17 4 12"/>
+          </svg>
+          claude-opus-4-5
+        </div>
+        <div class="model-option-desc">More powerful · Complex analysis</div>
+      </div>
+    </div>
+  </div>
+  <textarea id="chat-input" rows="1"
+    placeholder="Ask about pipeline, deals, AEs, win rates… or say 'export as PDF'"
+    onkeydown="handleKey(event)"></textarea>
+  <button id="send-btn" onclick="send()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+      <line x1="22" y1="2" x2="11" y2="13"/>
+      <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+    </svg>
+  </button>
+</div>
   </main>
 
   <!-- ── Export Side Panel ──────────────────────────────────────────────── -->
@@ -861,6 +926,40 @@
   let previewContent = null;     // last generated markdown content
   let exportBusy    = false;     // export generation in-flight
   let datasetRows   = 0;         // rows in server-side session store
+  let selectedModel = "sonnet";
+
+function toggleModelDropdown() {
+  document.getElementById("model-dropdown").classList.toggle("open");
+}
+
+function selectModel(m) {
+  selectedModel = m;
+  const pill   = document.getElementById("model-pill");
+  const label  = document.getElementById("model-pill-label");
+  const optS   = document.getElementById("opt-sonnet");
+  const optO   = document.getElementById("opt-opus");
+  const checkS = optS.querySelector("svg");
+  const checkO = optO.querySelector("svg");
+
+  if (m === "opus") {
+    label.textContent = "Opus";
+    pill.classList.add("opus");
+    optO.classList.add("active");    optS.classList.remove("active");
+    checkO.style.opacity = "1";      checkS.style.opacity = "0";
+  } else {
+    label.textContent = "Sonnet";
+    pill.classList.remove("opus");
+    optS.classList.add("active");    optO.classList.remove("active");
+    checkS.style.opacity = "1";      checkO.style.opacity = "0";
+  }
+  document.getElementById("model-dropdown").classList.remove("open");
+}
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#model-pill") && !e.target.closest("#model-dropdown")) {
+    document.getElementById("model-dropdown")?.classList.remove("open");
+  }
+});
 
   /* ======================================================================
      EXPORT FORMAT DETECTION (used to pre-fill the panel selector)
@@ -898,7 +997,15 @@
   /* ======================================================================
      MARKED CONFIG
      ====================================================================== */
-  marked.setOptions({ breaks: true, gfm: true });
+  const renderer = new marked.Renderer();
+const origCode = renderer.code.bind(renderer);
+renderer.code = function(code, lang) {
+  if (lang === 'html') {
+    return `<div class="inline-visual">${code}</div>`;
+  }
+  return origCode(code, lang);
+};
+marked.setOptions({ breaks: true, gfm: true, renderer });
 
   /* ======================================================================
      AUTO-RESIZE TEXTAREA
@@ -1456,7 +1563,7 @@
     try {
       const res = await fetch("/export/download", {
         method: "POST", headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({format:"csv", title, session_id: SESSION_ID}),
+        body: JSON.stringify({format:"csv", title, session_id: SESSION_ID,  model: selectedModel,}),
       });
       if (!res.ok) throw new Error((await res.json().catch(()=>({}))).detail || `HTTP ${res.status}`);
       const totalRows = res.headers.get("X-Total-Rows") || datasetRows;
