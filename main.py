@@ -3,7 +3,6 @@ import io
 import json
 import os
 import re
-import time
 import traceback
 import uuid
 from datetime import date, datetime
@@ -39,7 +38,7 @@ load_dotenv()
 # =============================================================================
 # FastAPI App
 # =============================================================================
-app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="6.3.0")
+app = FastAPI(title="DIUD", description="Decision Intelligence Using Data", version="4.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -52,29 +51,29 @@ app.add_middleware(
 # =============================================================================
 # Claude client
 # =============================================================================
-_ai_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
-MODELS = {
-    "sonnet": "claude-sonnet-4-6",
-    "opus":   "claude-opus-4-7",
-}
-_DEFAULT_MODEL = "claude-sonnet-4-6"
+_ai_client    = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+_CLAUDE_MODEL = "claude-sonnet-4-5"
 
 # =============================================================================
 # SERVER-SIDE SESSION STORE
+# Keeps the last query result per session so export endpoints can always
+# access the full raw dataset — no JSON embedding in messages, no truncation.
+# Key  : session_id (UUID string, generated once per browser tab)
+# Value: QueryResult dict with full rows + metadata
 # =============================================================================
 
 class QueryResult:
+    """Holds the full raw result of the most recent ClickHouse query in a session."""
     def __init__(self, sql: str, columns: List[str], rows: List[dict],
                  total_rows: int, captured_at: str, filters_applied: str = ""):
-        self.sql             = sql
-        self.columns         = columns
-        self.rows            = rows
-        self.total_rows      = total_rows
-        self.captured_at     = captured_at
+        self.sql            = sql
+        self.columns        = columns
+        self.rows           = rows          # ALL rows, no cap
+        self.total_rows     = total_rows
+        self.captured_at    = captured_at
         self.filters_applied = filters_applied
 
-_SESSION_STORE: Dict[str, QueryResult] = {}
+_SESSION_STORE: Dict[str, QueryResult] = {}   # session_id → QueryResult
 
 def _store_result(session_id: str, result: QueryResult):
     _SESSION_STORE[session_id] = result
@@ -84,7 +83,7 @@ def _get_result(session_id: str) -> Optional[QueryResult]:
 
 
 # =============================================================================
-# ClickHouse HTTP proxy helpers
+# ClickHouse HTTP proxy — base helpers
 # =============================================================================
 def _base_url() -> str:
     return (os.getenv("CLICKHOUSE_API_URL") or "").rstrip("/")
@@ -178,8 +177,8 @@ def discover_schema() -> str:
             col_lines = []
             for col in cols:
                 if isinstance(col, dict):
-                    col_name    = col.get("name") or col.get("column_name") or col.get("Field") or list(col.keys())[0]
-                    col_type    = col.get("type") or col.get("data_type") or col.get("Type") or ""
+                    col_name = col.get("name") or col.get("column_name") or col.get("Field") or list(col.keys())[0]
+                    col_type = col.get("type") or col.get("data_type") or col.get("Type") or ""
                     col_comment = col.get("comment") or col.get("Comment") or ""
                     col_lines.append(f"  {col_name:<35} {col_type}" + (f"  — {col_comment}" if col_comment else ""))
                 else:
@@ -191,75 +190,6 @@ def discover_schema() -> str:
     _SCHEMA_BLOCK = "\n".join(schema_lines) if schema_lines else "No tables found."
     print(f"✅ Schema loaded: {list(schema_dict.keys())}")
     return _SCHEMA_BLOCK
-
-
-# =============================================================================
-# INTENT CLASSIFIER
-# =============================================================================
-
-_INTENT_GREETING = re.compile(
-    r'^(hi|hey|hello|good\s+morning|good\s+afternoon|good\s+evening|'
-    r'thanks|thank\s+you|ok|okay|got\s+it|sure|sounds\s+good|'
-    r'great|awesome|perfect|cool|nice|bye|goodbye|see\s+you)[!.,\s]*$',
-    re.IGNORECASE,
-)
-
-_INTENT_EXPORT = re.compile(
-    r'\b(export|download|csv|pdf|pptx|powerpoint|send\s+me|give\s+me\s+the\s+(file|list|data)|'
-    r'save\s+as|extract\s+the\s+list|get\s+the\s+file)\b',
-    re.IGNORECASE,
-)
-
-_INTENT_DATA_STRONG = re.compile(
-    r'\b(pipeline|deal[s]?|stage|funnel|region|revenue|quota|target|attainment|'
-    r'win\s+rate|conversion|coverage|forecast|closed\s+won|closed\s+lost|'
-    r'deal\s+count|deal\s+value|deal\s+owner|account\s+executive|AE\b|'
-    r'top\s+\d|bottom\s+\d|rank|leaderboard|scorecard|'
-    r'how\s+many\s+deals|how\s+much\s+pipeline|'
-    r'stalled|stale|aging|overdue|'
-    r'fy\d{2}|fy27|fy26|quarter|q[1-4]\b|'
-    r'mql|marketing\s+qualified|lead|contact[s]?|'
-    r'gong|call[s]?\s+(by|per|volume|count|activity)|rep\s+performance|'
-    r'asana|task[s]?|project[s]?|portfolio|'
-    r'churn|renewal|expansion|upsell|nrr|arr|'
-    r'partner|industry|source|channel|'
-    r'north\s+america|emea|isea|japac|apac|'
-    r'dashboard|report|summary|breakdown|analysis|metrics?)\b',
-    re.IGNORECASE,
-)
-
-_INTENT_DATA_WEAK = re.compile(
-    r'\b(show|list|give|find|fetch|get|what\s+is|what\s+are|'
-    r'how\s+many|how\s+much|which|who\s+(has|is|are)|'
-    r'count|total|average|sum|compare|versus|vs\.?)\b',
-    re.IGNORECASE,
-)
-
-_INTENT_GENERAL = re.compile(
-    r'\b(what\s+does\s+\w+\s+mean|explain|define|how\s+does\s+\w+\s+work|'
-    r'what\s+is\s+(a|an|the)\s+(pipeline|funnel|mql|arr|nrr|churn)|'
-    r'tell\s+me\s+about|what\s+can\s+you|help\s+me\s+understand|'
-    r'schema|tables?|columns?|database\s+structure)\b',
-    re.IGNORECASE,
-)
-
-
-def classify_intent(message: str, has_prior_data: bool = False) -> str:
-    msg = message.strip()
-    if len(msg) < 60 and _INTENT_GREETING.match(msg):
-        return "greeting"
-    if _INTENT_EXPORT.search(msg) and has_prior_data:
-        return "export"
-    if _INTENT_DATA_STRONG.search(msg):
-        return "data_query"
-    if _INTENT_DATA_WEAK.search(msg) and len(msg) > 15:
-        if not _INTENT_GENERAL.search(msg):
-            return "data_query"
-    if _INTENT_GENERAL.search(msg):
-        return "general"
-    if len(msg) > 20 and "?" in msg:
-        return "data_query"
-    return "general"
 
 
 # =============================================================================
@@ -283,127 +213,46 @@ def _build_system_prompt() -> str:
         schema = schema[:20000] + "\n[schema truncated]"
 
     return f"""
-You are DIUD (Decision Intelligence Using Data) — a Revenue Intelligence Analyst,
-Strategy Consultant, and Executive Business Partner for Kore.ai. You think in
-business outcomes, not just SQL results.
+You are DIUD (Decision Intelligence Using Data) — a conversational data assistant.
+You have LIVE access to a ClickHouse database via the query_clickhouse tool.
 
 =================================================================
 GREETING RULE — HIGHEST PRIORITY
 =================================================================
-If the user's message is ONLY a greeting (hi, hey, hello, thanks, etc.),
+If the user's message is ONLY a greeting (hi, hey, hello, good morning, etc.),
 respond with EXACTLY:
 "Hey, I'm DIUD, your data intelligence agent to help you analyse
 the live ClickHouse or Web data. How may I help you?"
-No bullet points, no extras. No DB query.
-
-=================================================================
-INTENT CLASSIFICATION — MANDATORY FIRST STEP
-=================================================================
-GREETING   → Respond warmly, NO query.
-DATA_QUERY → MUST call query_clickhouse. NEVER assume numbers.
-EXPORT     → Respond with __EXPORT_INTENT__ marker. No re-query.
-GENERAL    → Explain conceptually, no query needed.
-
-=================================================================
-ALWAYS QUERY THE DATABASE FOR:
-=================================================================
-Pipeline · Deals · ARR · Revenue · Funnel · Conversion · Regions ·
-Industries · Partners · AEs · Targets · Win/Loss · Customer Success ·
-Any specific number, count, or metric
-
-NEVER answer from model knowledge for any of the above.
-HALLUCINATION CHECK: Before stating any number, ask yourself:
-"Did I get this from a query result in THIS conversation?" If no → query first.
-
-=================================================================
-BUSINESS INTELLIGENCE FRAMEWORK (every analytical answer)
-=================================================================
-**What Happened?** — Present the requested metrics from query results
-**Why Did It Happen?** — Analyse by Region / Source / Industry / AE / Stage
-**Why Does It Matter?** — Revenue impact, forecast impact, risk
-**What Should Be Done?** — Specific, actionable recommendations
-
-=================================================================
-EXECUTIVE OUTPUT FORMAT
-=================================================================
-**🎯 Business Intent:** [one line — what decision this supports]
-**TL;DR** — One sentence answer (lead with insight, not data)
-
-Then structured sections:
-## Executive Summary — 3–5 key findings
-## Key Metrics — tables and KPIs (use real query data)
-## Key Findings — business interpretation
-## What's Working 🟢 — strengths
-## What's Not Working 🔴 — weaknesses and risks
-## Recommended Actions — specific next steps
-
-Use 🔴 High Risk · 🟡 Watch · 🟢 Healthy for risk signals.
-Bold key numbers: **$4.2M**, **67%**, **3 AEs**
-
-End complex analyses with:
-> 💡 **Next:** [one logical follow-up question]
-
-For simple factual lookups: skip the structure, answer in 1–2 lines.
-
-=================================================================
-FUNNEL ANALYSIS — MANDATORY APPROACH
-=================================================================
-NEVER write a single query that joins or scans all funnel stages at once.
-This ALWAYS times out. Instead, run ONE simple query per stage.
-
-CORRECT APPROACH — run these as separate sequential queries:
-
-Query 1: Count deals that became 10% in FY27
-SELECT countDistinct(deal_id) as deals_10pct
-FROM hs_analytics.deals FINAL
-WHERE toDate(LEFT(coalesce(became_10_deal_date,'1900-01-01'),10)) >= '2026-04-01'
-AND toDate(LEFT(coalesce(became_10_deal_date,'1900-01-01'),10)) <= '2027-03-31'
-AND pipeline = 'default'
-AND CASE WHEN deal_type IS NULL THEN 'Not Assigned' ELSE deal_type END NOT IN ('Partner-Led SMB')
-AND toInt64(deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
-
-Query 2: Of those, how many also reached 20%
--- add: AND toDate(LEFT(coalesce(became_20_deal_date,'1900-01-01'),10)) >= '2026-04-01'
-
-Repeat for 30%, 40%, 60%, 75%, Closed Won (deal_stage = 'Closed Won').
-Each query runs in under 5s. Combine results in your analysis narrative.
-NEVER attempt a UNION ALL or multi-stage CTE for funnel cohort analysis.
-
-=================================================================
-PIPELINE ANALYSIS — AUTO-CALCULATE
-=================================================================
-Deal Count · Pipeline Value · Average Deal Size · Stage Distribution ·
-Pipeline Coverage · Stage Conversion · Funnel Leakage · Stage Velocity ·
-Stalled Deals · Regional Performance · Source Performance · Top/Bottom AEs
-
-Identify: Largest Bottleneck · Largest Leakage · Largest Growth Opportunity
-
-=================================================================
-RISK DETECTION — ALWAYS CHECK
-=================================================================
-Pipeline Risk: Low Coverage · Stalled Deals · Low Conversion
-Revenue Risk: Forecast Gap · Pipeline Concentration
-Execution Risk: AE Dependency · Region Dependency · Partner Dependency
+No bullet points, no extras. This overrides everything.
 
 =================================================================
 EXPORT INTENT RULE
 =================================================================
-When user asks to export/download/get CSV/PDF/PPTX of PREVIOUS results,
-respond with this EXACT marker on its own line:
+When the user asks to export, download, or get a list/CSV/PDF of results
+from a PREVIOUS query in this conversation (e.g. "give me those 256 deals",
+"export the list", "download this as CSV", "I need those deals in PDF"),
+respond with this EXACT marker on a line by itself:
 
 __EXPORT_INTENT__
 
-Then a friendly confirmation. Do NOT re-run the query.
+Then on the next line, write a friendly confirmation message like:
+"Sure! I'm exporting all [N] deals from the previous query to your chosen format."
+
+Do NOT re-run the query. Do NOT ask which format. The export panel
+will handle format selection and will re-use the already-stored query result.
 
 =================================================================
-CLICKHOUSE ACCESS — MANDATORY
+CLICKHOUSE DIRECT ACCESS
 =================================================================
-Call query_clickhouse for ANY business metric question.
-If it returns DATABASE CONNECTION FAILED or ERROR:, relay it exactly.
-Do NOT guess at answers when DB fails.
+You have a tool called query_clickhouse.
+Use it for any question about pipeline deals, AEs, regions, industries,
+stages, win/loss, competitors, conversions, or any metric not already
+in the conversation context.
+
+If the tool returns DATABASE CONNECTION FAILED, relay it to the user.
 
 =================================================================
-DUPLICATE RECORD EXCLUSION
+DUPLICATE RECORD EXCLUSION — ALWAYS APPLY
 =================================================================
 1. hs_analytics tables: ALWAYS use FINAL keyword
 2. Aggregations: always countDistinct(), never count()
@@ -413,54 +262,32 @@ DUPLICATE RECORD EXCLUSION
 =================================================================
 TABLES
 =================================================================
-── hs_analytics.deals (FINAL) ──────────────────────────────────
-deal_id, deal_name, deal_owner, deal_stage, deal_type, pipeline,
-amount, region, deal_source_rollup, kore_primary_industry,
-account_priority_level, create_date, close_date,
-became_5_deal_date, became_10_deal_date, became_20_deal_date,
-became_30_deal_date, became_40_deal_date, became_60_deal_date,
-became_75_deal_date
+── TABLE 1: hs_analytics.deals ─────────────────────────────────
+ALWAYS use FINAL. Key columns: deal_id, deal_name, deal_owner, deal_stage,
+deal_type, pipeline, amount, region, deal_source_rollup, kore_primary_industry,
+account_priority_level, create_date, close_date, became_5_deal_date,
+became_10_deal_date, became_20_deal_date, became_30_deal_date,
+became_40_deal_date, became_60_deal_date, became_75_deal_date
 
-── hs_analytics.owners (FINAL) ─────────────────────────────────
+── TABLE 2: hs_analytics.owners (FINAL) ─────────────────────────
 id, firstName, lastName, email
 
-── hs_analytics.companies (FINAL) ──────────────────────────────
+── TABLE 3: hs_analytics.companies (FINAL) ──────────────────────
 company_id, name, domain, industry, country, city
 
-── hs_analytics.contacts (FINAL) ────────────────────────────────
+── TABLE 4: hs_analytics.contacts (FINAL) ───────────────────────
 contact_id, email, first_name, last_name, company_name, company_priority,
 region, original_source, lead_status, lifecycle_stage,
 date_entered_marketing_qualified_lead_lifecycle_stage_pipeline
 
-── kore_ai_hubspot.gs_DealContactAssociation ────────────────────
+── TABLE 5: kore_ai_hubspot.gs_DealContactAssociation ───────────
 contact_id, deal_id
 
-── kore_ai_hubspot.gs_marketing_targets ─────────────────────────
+── TABLE 6: kore_ai_hubspot.gs_marketing_targets ────────────────
 fy, quarter, month, region, original_source, mql_target
 
-── kore_ai_hubspot.gs_deal_ids_hs ───────────────────────────────
+── TABLE 7: kore_ai_hubspot.gs_deal_ids_hs ──────────────────────
 deal_id_hs
-
-── GONG (hs_analytics, FINAL) ───────────────────────────────────
-go_calls: id, title, direction, duration, started, primaryUserId
-go_users: id, emailAddress, firstName, lastName, title, active
-JOIN: go_calls.primaryUserId = go_users.id
-
-── ASANA (hs_analytics, FINAL) ──────────────────────────────────
-asana_tasks: gid, name, assignee_name, assignee_email, status,
-  due_on, completed (String 'true'/'false'), created_at
-asana_projects: gid, name, cf_region, cf_csm, cf_nrr,
-  cf_deal_stage, cf_record_id_es, cf_renewal_date
-asana_project_task_association: task_gid, project_gid, project_name, section
-asana_portfolios: gid, name, status_title
-asana_portfolio_project_association: portfolio_gid, project_gid, project_name
-
-── TARGET TABLES ─────────────────────────────────────────────────
-gs_pipeline_quotas_v1       — Pipeline EOP targets + attainment
-gs_partner_targets_region_wise — Region partner targets
-gs_partner_targets_psd      — PSD partner performance
-gs_marketing_targets        — MQL targets by region/source
-gs_closed_won_quotas        — Closed Won quotas
 
 =================================================================
 MANDATORY BASE FILTERS (every deals query)
@@ -477,8 +304,8 @@ FISCAL YEAR
 =================================================================
 FY27 = Apr 2026 – Mar 2027. Default to FY27 unless specified.
 Active pipeline close_date: >= '2026-04-01' AND <= '2027-03-31'
-Active stages: '20% - Solution','30% - Proof','40% - Proposal',
-               '60% - Price Negotiation','75% - Contract Review'
+Stages: '20% - Solution','30% - Proof','40% - Proposal',
+        '60% - Price Negotiation','75% - Contract Review'
 
 =================================================================
 QUERY RULES
@@ -486,21 +313,20 @@ QUERY RULES
 1. SELECT / WITH only — no destructive SQL
 2. FINAL on all hs_analytics tables
 3. Apply all 3 mandatory base filters on deals
-4. For LIST queries: NO LIMIT unless user says "top N"
+4. For LIST queries: NO LIMIT unless user says "top N" or "first N"
+   Return ALL matching rows — the system handles display safely
 5. countDistinct(deal_id) for unique counts
 6. round(sum(amount)/1e6, 1) for $M amounts
 7. Dates: toDate(LEFT(coalesce(col,'1900-01-01'),10))
-8. Tell the user the TOTAL count ("Found 256 deals")
+8. Always tell the user the TOTAL count (e.g. "Found 256 deals")
 
 =================================================================
-REGION / SOURCE / INDUSTRY MAPPINGS
+REGION / SOURCE / INDUSTRY MAPPINGS (SELECT only, not WHERE)
 =================================================================
 Region:  japac→JAPAC, Africa→Middle East, india___sea→ISEA
-Source:  Executive Outreach+Investor→Executive Outreach, BDR Outbound→BDR
-Industry: Financial Services+Banking+Insurance→Financial Services
-
-ATTAINMENT: round(actual / target * 100, 1)
-COVERAGE:   round(pipeline / revenue_target, 1)
+Source:  Executive Outreach+Investor→Executive Outreach, BDR Outbound→BDR, Partner→Partner - Non Hyperscaler
+Industry: Financial Services+Banking+Insurance→Financial Services,
+          Manufacturing Discreet+Manufacturing Process+CPG→Manufacturing
 
 CORE RULES:
 - NEVER fabricate numbers. Query the DB for every metric.
@@ -510,42 +336,186 @@ CORE RULES:
 =================================================================
 TARGET TABLES — QUOTAS, ATTAINMENT & GOVERNANCE
 =================================================================
-── kore_ai_hubspot.gs_pipeline_quotas_v1 ───────────────────────
-PURPOSE: Global pipeline targets and quotas.
-USE FOR: Revenue targets, EOP tracking, quarterly comparisons,
-         attainment calculations, gap-to-target analysis.
-NOTES: Always GROUP BY + SUM. Join to deals on fiscal period/region.
+Use these tables for any question about targets, quotas, attainment,
+coverage, EOP, or pipeline governance.
 
-── kore_ai_hubspot.gs_partner_targets_region_wise ──────────────
+── TABLE T1: kore_ai_hubspot.gs_pipeline_quotas_v1 ─────────────
+PURPOSE: Global pipeline targets and quotas (org-wide).
+USE FOR:
+  • Revenue targets and pipeline targets
+  • EOP (End-of-Period) target tracking
+  • Quarterly / FY performance comparisons
+  • Attainment calculations: actual ÷ quota
+  • Gap-to-target analysis
+QUERY NOTES:
+  • Always GROUP BY + SUM for quota values (multiple rows per period)
+  • Join to hs_analytics.deals FINAL on fiscal period / region / stage
+    to compute attainment percentages
+
+── TABLE T2: kore_ai_hubspot.gs_partner_targets_region_wise ─────
 PURPOSE: Region-level partner targets.
-USE FOR: Regional partner performance, partner pipeline by region.
+USE FOR:
+  • Regional partner performance analysis
+  • Partner pipeline contribution by region
+  • Region-wise quota tracking
+  • Partner attainment metrics vs regional targets
 
-── kore_ai_hubspot.gs_partner_targets_psd ──────────────────────
-PURPOSE: Partner-level PSD targets.
-USE FOR: PSD performance tracking, partner contribution analysis.
+── TABLE T3: kore_ai_hubspot.gs_partner_targets_psd ─────────────
+PURPOSE: Partner-level PSD (Partner Sales Director) targets.
+USE FOR:
+  • PSD-level performance tracking
+  • Partner contribution analysis at PSD granularity
+  • PSD quota attainment
+  • Partner pipeline governance metrics
 
-── kore_ai_hubspot.gs_marketing_targets ────────────────────────
-USE FOR: Marketing-sourced pipeline, MQL targets by region/source.
-NOTES: SELECT region, mql_source, SUM(mql_target) GROUP BY region, mql_source
+── TABLE T4: kore_ai_hubspot.gs_marketing_targets ───────────────
+(Already listed as TABLE 6 — same table, additional context below)
+USE FOR:
+  • Marketing-sourced pipeline analysis
+  • Campaign target tracking
+  • Marketing contribution vs targets
+  • Funnel performance (MQL → opportunity)
+QUERY NOTES:
+  • Always: SELECT region, mql_source, SUM(mql_target)
+    FROM kore_ai_hubspot.gs_marketing_targets GROUP BY region, mql_source
 
-── kore_ai_hubspot.gs_closed_won_quotas ────────────────────────
-PURPOSE: Closed Won quotas and global pipeline governance targets.
-USE FOR: Closed Won attainment, revenue realization, forecast vs actual.
-NOTES: Join to deals where deal_stage = 'Closed Won' on period/region.
+── TABLE T5: kore_ai_hubspot.gs_closed_won_quotas ───────────────
+PURPOSE: Closed Won amount quotas and global pipeline governance targets.
+USE FOR:
+  • Closed Won attainment: actual won ÷ closed_won_quota
+  • Global pipeline governance reporting
+  • Revenue realization tracking
+  • Forecast vs actual analysis
+QUERY NOTES:
+  • Join to hs_analytics.deals FINAL where deal_stage = 'Closed Won'
+    on period / region to compute attainment %
 
-ATTAINMENT FORMULA: round(actual_value / target_value * 100, 1)
-COVERAGE FORMULA:   round(pipeline_value / revenue_target, 1)
+ATTAINMENT FORMULA (standard):
+  attainment_pct = round(actual_value / target_value * 100, 1)
 
-SCHEMA:
-{schema}
+COVERAGE RATIO FORMULA:
+  coverage_ratio = round(pipeline_value / revenue_target, 1)
+
+=================================================================
+DASHBOARD DEFINITIONS — CONTEXT & KPI LOGIC
+=================================================================
+When a user asks about a specific dashboard (EOP, Exec KPI, CS,
+or Global Pipeline Governance), apply the correct logic below.
+
+── DASHBOARD 1: EOP (End-of-Period) DASHBOARD ──────────────────
+PURPOSE: Tracks pipeline health and attainment against EOP targets
+at the end of each fiscal quarter.
+
+KEY METRICS:
+  • EOP Pipeline Value — total amount of active deals within the
+    EOP date window. Source: hs_analytics.deals FINAL
+  • EOP Target — from kore_ai_hubspot.gs_pipeline_quotas_v1
+  • EOP Attainment % — EOP Pipeline ÷ EOP Target × 100
+  • Stage-wise EOP breakdown — pipeline bucketed by deal_stage
+  • Region-wise EOP — pipeline grouped by region
+
+FILTERS TO APPLY:
+  • Mandatory base filters on deals
+  • close_date within current quarter end window
+  • deal_stage IN active stages (20%–75%)
+  • pipeline = 'default'
+
+TYPICAL QUERIES:
+  "What is our EOP pipeline vs target for Q2 FY27?"
+  "Show EOP attainment by region"
+  "Gap to EOP target this quarter"
+
+── DASHBOARD 2: EXEC KPI DASHBOARD ─────────────────────────────
+PURPOSE: Senior leadership view of pipeline performance, win rates,
+and revenue attainment across all regions.
+
+KEY METRICS:
+  • Total Active Pipeline ($M) — sum(amount) on active deals
+  • Closed Won ($M) — sum(amount) where deal_stage = 'Closed Won'
+  • Closed Won Attainment % — Closed Won ÷ gs_closed_won_quotas × 100
+  • Win Rate % — Closed Won deals ÷ (Closed Won + Closed Lost) × 100
+  • Pipeline Coverage — Active Pipeline ÷ Revenue Target
+  • New Logo Count — countDistinct(deal_id) where deal_type = 'New Logo'
+  • ACV Weighted Pipeline — (stage_probability × amount) summed
+
+FILTERS TO APPLY:
+  • All mandatory base filters
+  • FY27 date range on close_date
+  • Exclude deal_stage IN ('Closed Won','Closed Lost') for active pipeline
+
+TYPICAL QUERIES:
+  "Executive KPI summary for FY27"
+  "Closed Won attainment vs quota by region"
+  "Win rate trend by quarter"
+
+── DASHBOARD 3: CS (Customer Success) DASHBOARD ────────────────
+PURPOSE: Tracks existing customer pipeline — renewals, upsells,
+expansions — and CS team performance.
+
+KEY METRICS:
+  • Renewal Pipeline ($M) — deals where deal_type LIKE '%Renewal%'
+  • Upsell / Expansion Pipeline ($M) — deal_type LIKE '%Upsell%'
+    or deal_type LIKE '%Expansion%'
+  • Renewal Win Rate % — Closed Won renewals ÷ total renewals × 100
+  • Net Revenue Retention (NRR) — (Renewals + Upsells) ÷ Base ARR
+  • At-Risk Deals — active deals with stale last_contacted date
+  • CS AE Performance — pipeline / closed won by owner filtered to
+    CS team (join to kore_ai_hubspot.gs_Teams on hubspot_team)
+
+FILTERS TO APPLY:
+  • All mandatory base filters
+  • deal_type IN ('Renewal','Upsell','Expansion') or similar values
+  • FY27 date range
+
+TYPICAL QUERIES:
+  "CS renewal pipeline for FY27"
+  "Upsell attainment by AE"
+  "At-risk renewals this quarter"
+
+── DASHBOARD 4: GLOBAL PIPELINE GOVERNANCE DASHBOARD ───────────
+PURPOSE: Executive governance view comparing pipeline across all
+regions, sources, and partner types against global targets.
+
+KEY METRICS:
+  • Global Pipeline by Region ($M) — broken down by region + stage
+  • Partner Pipeline ($M) — deals from partner sources
+    (deal_source_rollup LIKE '%Partner%')
+  • Partner Attainment % — vs kore_ai_hubspot.gs_partner_targets_region_wise
+  • Partner PSD Attainment % — vs kore_ai_hubspot.gs_partner_targets_psd
+  • Pipeline Coverage Ratio — by region vs gs_pipeline_quotas_v1
+  • Closed Won Governance — actual vs gs_closed_won_quotas by region/quarter
+  • Marketing Sourced Pipeline — deals from marketing sources
+    vs gs_marketing_targets
+
+FILTERS TO APPLY:
+  • All mandatory base filters
+  • FY27 date range
+  • Appropriate partner source filters for partner metrics
+
+TYPICAL QUERIES:
+  "Global pipeline governance report for FY27"
+  "Partner pipeline attainment by region"
+  "Closed Won vs quota by quarter"
+  "Marketing sourced pipeline vs targets"
+
+DASHBOARD SELECTION RULE:
+If the user mentions a specific dashboard by name, apply its metric
+definitions and target table references automatically. If unclear,
+ask the user which dashboard context they want.
 """
 
 _SYSTEM_PROMPT = _build_system_prompt()
 
 # =============================================================================
-# ClickHouse query runner
+# ClickHouse query runner — stores full result in session, returns display text
 # =============================================================================
 def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
+    """
+    Execute SQL against ClickHouse.
+    - Stores the FULL result set in _SESSION_STORE[session_id] (no row cap).
+    - Returns a chat-display string capped at CHAT_DISPLAY_LIMIT rows.
+    The export layer reads from the session store and gets all rows.
+    """
     base_url = _base_url()
     token    = _token()
 
@@ -563,29 +533,13 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
 
     print(f"🔍 SQL (session={session_id}) → {sql[:200]}")
 
-    GONG_TABLES   = ["go_calls", "go_users"]
-    is_gong_query = any(t in sql for t in GONG_TABLES)
-    MAX_RETRIES   = 3 if is_gong_query else 1
-    RETRY_DELAYS  = [2, 5]
-
-    last_error: str = ""
-    resp = None
-    for attempt in range(MAX_RETRIES):
-        if attempt > 0:
-            delay = RETRY_DELAYS[min(attempt - 1, len(RETRY_DELAYS) - 1)]
-            print(f"   ⏳ Retry {attempt}/{MAX_RETRIES - 1} after {delay}s…")
-            time.sleep(delay)
-        try:
-            resp = httpx.post(
-                f"{base_url}/query",
-                headers=_auth_headers(),
-                json={"query": sql},
-                timeout=120,
-            )
-        except httpx.ConnectError as e:
-            return f"DATABASE CONNECTION FAILED: Could not reach {base_url}. {e}"
-        except httpx.TimeoutException:
-            return "DATABASE ERROR: Query timed out after 120 s."
+    try:
+        resp = httpx.post(
+            f"{base_url}/query",
+            headers=_auth_headers(),
+            json={"query": sql},
+            timeout=60,
+        )
 
         if resp.status_code == 401:
             return "DATABASE CONNECTION FAILED: 401 Unauthorized."
@@ -594,26 +548,13 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
         if resp.status_code == 422:
             return f"ERROR: Proxy rejected query (422): {resp.text[:400]}"
         if resp.status_code == 500:
-            last_error = resp.text[:400]
-            print(f"   ❌ HTTP 500 on attempt {attempt + 1}/{MAX_RETRIES}: {last_error[:120]}")
-            if attempt < MAX_RETRIES - 1:
-                continue
-            if is_gong_query:
-                return (
-                    f"DATABASE ERROR: HTTP 500 on Gong table query (failed after {MAX_RETRIES} attempts). "
-                    f"Raw error: {last_error[:300]}"
-                )
-            return f"DATABASE ERROR: HTTP 500 (failed after {MAX_RETRIES} attempts): {last_error}"
+            return f"DATABASE ERROR: HTTP 500: {resp.text[:400]}"
         if resp.status_code != 200:
             return f"DATABASE ERROR: HTTP {resp.status_code} — {resp.text[:300]}"
-        break
 
-    if resp is None:
-        return "DATABASE CONNECTION FAILED: No response received."
-
-    try:
         payload = resp.json()
 
+        # Normalise to list of rows
         if isinstance(payload, list):
             rows = payload
         elif isinstance(payload, dict):
@@ -627,10 +568,12 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
         if not rows:
             return "Query returned 0 rows."
 
+        # Normalise rows to list-of-dicts
         if isinstance(rows[0], dict):
             columns = list(rows[0].keys())
             norm_rows = rows
         else:
+            # List-of-lists — use index keys
             if api_columns and len(api_columns) == len(rows[0]):
                 columns = [c["name"] if isinstance(c, dict) else c for c in api_columns]
             else:
@@ -639,16 +582,18 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
 
         total_rows = len(norm_rows)
 
+        # ── Store FULL result in session (no row cap) ──────────────────
         if session_id:
             _store_result(session_id, QueryResult(
-                sql           = sql,
-                columns       = columns,
-                rows          = norm_rows,
-                total_rows    = total_rows,
-                captured_at   = datetime.utcnow().isoformat() + "Z",
+                sql          = sql,
+                columns      = columns,
+                rows         = norm_rows,   # ALL rows
+                total_rows   = total_rows,
+                captured_at  = datetime.utcnow().isoformat() + "Z",
                 filters_applied = _extract_filters_from_sql(sql),
             ))
 
+        # ── Build chat display (capped at 100 rows for readability) ───
         CHAT_DISPLAY_LIMIT = 100
         header = " | ".join(columns)
         lines  = [header, "-" * min(len(header), 140)]
@@ -658,19 +603,25 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
         if total_rows > CHAT_DISPLAY_LIMIT:
             lines.append(
                 f"\n📊 **Showing {CHAT_DISPLAY_LIMIT} of {total_rows} rows.** "
-                f"Say **\"export these deals as CSV\"** to download all {total_rows} records."
+                f"Say **\"export these deals as CSV\"** or **\"export as PDF\"** "
+                f"to download all {total_rows} records."
             )
 
         result = "\n".join(lines)
-        print(f"   ✅ {total_rows} rows returned.")
+        print(f"   ✅ {total_rows} rows returned. Session store updated.")
         return result
 
+    except httpx.ConnectError as e:
+        return f"DATABASE CONNECTION FAILED: Could not reach {base_url}. {e}"
+    except httpx.TimeoutException:
+        return "DATABASE CONNECTION FAILED: Query timed out after 60 seconds."
     except Exception as exc:
         traceback.print_exc()
         return f"DATABASE CONNECTION FAILED: {type(exc).__name__}: {exc}"
 
 
 def _extract_filters_from_sql(sql: str) -> str:
+    """Extract a human-readable summary of WHERE filters from SQL."""
     sql_upper = sql.upper()
     filters = []
     if "PIPELINE = 'DEFAULT'" in sql_upper:
@@ -700,7 +651,7 @@ async def on_startup():
     global _SYSTEM_PROMPT
     discover_schema()
     _SYSTEM_PROMPT = _build_system_prompt()
-    print("🚀 DIUD v6.3 started — intent-aware routing + stable tool-use pairing.")
+    print("🚀 DIUD v4 started — session-store export enabled.")
 
 
 # =============================================================================
@@ -721,7 +672,8 @@ _QUERY_TOOL = {
                 "type": "string",
                 "description": (
                     "Valid ClickHouse SELECT or WITH query. "
-                    "For deal LIST queries: NO LIMIT unless user asks for 'top N'."
+                    "For deal LIST queries: NO LIMIT unless user asks for 'top N'. "
+                    "Return all matching rows — the system displays them safely."
                 ),
             }
         },
@@ -740,7 +692,6 @@ class ChatRequest(BaseModel):
     message: str
     history: List[ChatMessage] = []
     session_id: Optional[str] = None
-    model: Optional[str] = None
 
 class ExportPreviewRequest(BaseModel):
     conversation: List[ChatMessage] = []
@@ -751,113 +702,46 @@ class ExportPreviewRequest(BaseModel):
 
 class ExportDownloadRequest(BaseModel):
     format: Literal["pdf", "pptx", "csv"]
-    content: Optional[str] = None
+    content: Optional[str] = None    # markdown content (pdf/pptx)
     title: str = "Pipeline Intelligence Report"
     session_id: Optional[str] = None
 
 
 # =============================================================================
-# Model resolution helpers
-# =============================================================================
-def _resolve_model(model_hint: Optional[str]) -> str:
-    if not model_hint:
-        return _DEFAULT_MODEL
-    if model_hint in MODELS:
-        return MODELS[model_hint]
-    if model_hint in MODELS.values():
-        return model_hint
-    hint_lower = model_hint.lower()
-    if "opus" in hint_lower:
-        return MODELS["opus"]
-    if "sonnet" in hint_lower:
-        return MODELS["sonnet"]
-    return _DEFAULT_MODEL
-
-
-def _is_opus_model(model: str) -> bool:
-    return "opus" in model.lower()
-
-
-def _build_api_kwargs(model: str, **kwargs) -> dict:
-    api_kwargs = dict(model=model, **kwargs)
-    if _is_opus_model(model):
-        api_kwargs.pop("temperature", None)
-    return api_kwargs
-
-
-# =============================================================================
-# Text extraction helper
+# Claude tool loop — passes session_id so query runner can store results
 # =============================================================================
 def _extract_text(content_blocks) -> str:
-    if not content_blocks:
-        return ""
-    parts = []
-    for b in content_blocks:
-        if hasattr(b, "text") and b.text:
-            parts.append(b.text)
-        elif hasattr(b, "type") and b.type == "tool_use":
-            parts.append("⚠️ Query was interrupted. Please try again.")
-    return "\n".join(parts).strip()
+    return "\n".join(
+        b.text for b in content_blocks if hasattr(b, "text") and b.text
+    ).strip()
 
 
-# =============================================================================
-# _call_claude — intent-aware, history-safe, tool-use paired correctly
-#
-# KEY FIXES vs v4:
-# 1. data_query intent: strip history entirely — Claude re-queries DB fresh.
-#    This eliminates 400 errors from broken tool_use state in history.
-# 2. try/except around run_clickhouse_query — tool_result always paired.
-# 3. Broad is_error early return — any DB error surfaces immediately.
-# 4. try/except around second API call — partial text returned on failure.
-# 5. tool_choice "any" for data_query (forces tool call), "auto" after.
-# =============================================================================
-def _call_claude(
-    messages: list,
-    max_tokens: int = 8192,
-    session_id: Optional[str] = None,
-    model_hint: Optional[str] = None,
-    intent: str = "general",
-) -> str:
-    model = _resolve_model(model_hint)
-    print(f"🤖 model={model} intent={intent} session={session_id}")
+def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[str] = None) -> str:
+    """Run Claude with query_clickhouse tool. Up to 5 tool rounds."""
 
-    # Build clean api_messages from plain-text history only.
-    # Never re-inject tool_use/tool_result blocks from prior turns.
-    api_messages = []
+    # Strip tool_use/tool_result blocks from history (can't replay them)
+    safe_messages = []
     for m in messages:
         content = m.get("content", "")
         if isinstance(content, list):
             text_parts = [
                 b.get("text", "") if isinstance(b, dict) else (b.text if hasattr(b, "text") else "")
-                for b in content
-                if (isinstance(b, dict) and b.get("type") == "text")
+                for b in content if (isinstance(b, dict) and b.get("type") == "text")
                    or (hasattr(b, "type") and b.type == "text")
             ]
-            content = "\n".join(t for t in text_parts if t).strip()
-        if content:
-            api_messages.append({"role": m["role"], "content": content})
-
-    # FIX 1: Strip history for data queries.
-    # data_query always re-queries the DB fresh — history is never needed
-    # and is the sole source of broken tool_use state causing 400 errors.
-    if intent == "data_query":
-        api_messages = [m for m in api_messages if m["role"] == "user"][-1:]
-
-    # tool_choice: force tool call on first turn for data queries,
-    # auto for everything else. After first turn always use "auto".
-    first_tool_choice = {"type": "any"} if intent == "data_query" else {"type": "auto"}
-    print(f"   first tool_choice={first_tool_choice['type']}")
+            text = "\n".join(t for t in text_parts if t).strip()
+            if text:
+                safe_messages.append({"role": m["role"], "content": text})
+        else:
+            safe_messages.append({"role": m["role"], "content": content})
 
     response = _ai_client.messages.create(
-        **_build_api_kwargs(
-            model,
-            system      = _SYSTEM_PROMPT,
-            messages    = api_messages,
-            tools       = [_QUERY_TOOL],
-            tool_choice = first_tool_choice,
-            temperature = 0,
-            max_tokens  = max_tokens,
-        )
+        model=_CLAUDE_MODEL,
+        system=_SYSTEM_PROMPT,
+        messages=safe_messages,
+        tools=[_QUERY_TOOL],
+        temperature=0,
+        max_tokens=max_tokens,
     )
 
     for _ in range(5):
@@ -868,57 +752,30 @@ def _call_claude(
         if not tool_block:
             break
 
-        sql = tool_block.input.get("sql", "")
-        print("\n========== GENERATED SQL ==========")
-        print(sql)
-        print("===================================\n")
-
-        # FIX 2: Always capture a result even on exception.
-        try:
-            query_result = run_clickhouse_query(sql, session_id=session_id)
-        except Exception as e:
-            query_result = f"DATABASE ERROR: Unexpected exception: {e}"
-
-        is_error = any(query_result.startswith(p) for p in [
+        sql          = tool_block.input.get("sql", "")
+        query_result = run_clickhouse_query(sql, session_id=session_id)
+        is_error     = any(query_result.startswith(p) for p in [
             "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
         ])
 
-        # FIX 3: Surface any DB error immediately — don't loop.
-        # Claude cannot recover from DB errors; looping wastes 5 rounds
-        # and produces empty responses.
-        if is_error:
-            return (
-                f"⚠️ **Database error** — {query_result}\n\n"
-                "Please try a simpler query, or ask one stage at a time for funnel analysis."
-            )
-
-        # Correctly pair tool_use → tool_result before next API call.
-        api_messages = api_messages + [
+        safe_messages = safe_messages + [
             {"role": "assistant", "content": response.content},
             {"role": "user", "content": [{
                 "type":        "tool_result",
                 "tool_use_id": tool_block.id,
                 "content":     query_result,
-                "is_error":    False,
+                "is_error":    is_error,
             }]},
         ]
 
-        # FIX 4: Catch API errors on subsequent calls.
-        try:
-            response = _ai_client.messages.create(
-                **_build_api_kwargs(
-                    model,
-                    system      = _SYSTEM_PROMPT,
-                    messages    = api_messages,
-                    tools       = [_QUERY_TOOL],
-                    tool_choice = {"type": "auto"},
-                    temperature = 0,
-                    max_tokens  = max_tokens,
-                )
-            )
-        except Exception as e:
-            partial = _extract_text(response.content)
-            return partial or f"⚠️ API error after tool call: {e}"
+        response = _ai_client.messages.create(
+            model=_CLAUDE_MODEL,
+            system=_SYSTEM_PROMPT,
+            messages=safe_messages,
+            tools=[_QUERY_TOOL],
+            temperature=0,
+            max_tokens=max_tokens,
+        )
 
     reply = _extract_text(response.content)
     if not reply:
@@ -927,7 +784,7 @@ def _call_claude(
 
 
 # =============================================================================
-# Routes — static
+# Routes — chat
 # =============================================================================
 @app.get("/", response_class=HTMLResponse)
 def root():
@@ -978,134 +835,110 @@ def refresh_schema():
     return {"status": "refreshed", "tables": list(_LIVE_SCHEMA.keys())}
 
 
-# =============================================================================
-# Routes — chat
-# =============================================================================
 @app.post("/chat")
 def chat(payload: ChatRequest):
-    has_prior_data = (
-        payload.session_id is not None
-        and payload.session_id in _SESSION_STORE
-    )
-
-    intent = classify_intent(payload.message, has_prior_data=has_prior_data)
-    print(f"💬 [chat] session={payload.session_id} intent={intent} msg={payload.message[:80]}")
-
     messages = [{"role": m.role, "content": m.content} for m in payload.history]
     messages.append({"role": "user", "content": payload.message})
+    print(f"💬 [chat] session={payload.session_id} msg={payload.message[:80]}")
 
     try:
-        reply = _call_claude(
-            messages,
-            session_id = payload.session_id,
-            model_hint = payload.model,
-            intent     = intent,
-        )
+        reply = _call_claude(messages, session_id=payload.session_id)
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Claude error: {exc}")
 
+    # Surface whether there is a stored dataset for this session
     has_dataset = payload.session_id is not None and payload.session_id in _SESSION_STORE
-    stored      = _SESSION_STORE.get(payload.session_id) if payload.session_id else None
-    funnel_data = _extract_funnel_data(reply)
-    chart_data  = _extract_chart_data(reply)
+    stored = _SESSION_STORE.get(payload.session_id) if payload.session_id else None
 
     return {
-        "reply":         reply,
-        "intent":        intent,
-        "has_dataset":   has_dataset,
-        "dataset_rows":  stored.total_rows if stored else 0,
+        "reply":        reply,
+        "has_dataset":  has_dataset,
+        "dataset_rows": stored.total_rows if stored else 0,
         "export_intent": "__EXPORT_INTENT__" in reply,
-        "funnel_data":   funnel_data,
-        "chart_data":    chart_data,
     }
 
 
-def _extract_funnel_data(reply: str) -> Optional[dict]:
-    match = re.search(r'```funnel-data\s*\n(.*?)\n```', reply, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(1))
-        except Exception:
-            return None
-    return None
-
-
-def _extract_chart_data(reply: str) -> Optional[dict]:
-    match = re.search(r'```chart-data\s*\n(.*?)\n```', reply, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(1))
-        except Exception:
-            return None
-    return None
-
-
 # =============================================================================
-# Retry
+# Retry — re-runs the last user message with fresh LLM call
 # =============================================================================
+
 class RetryRequest(BaseModel):
+    """
+    Re-run the most recent user message with a fresh LLM call.
+
+    history    : full conversation UP TO AND INCLUDING the last user message.
+                 The last item must be role='user'. Any prior assistant reply
+                 for that turn is intentionally excluded so the model generates
+                 a new response.
+    session_id : existing session — query results from previous turns are
+                 preserved in the session store so exports still work.
+    """
     history:    List[ChatMessage] = []
     session_id: Optional[str] = None
-    model:      Optional[str] = None
 
 
 @app.post("/chat/retry")
 def chat_retry(payload: RetryRequest):
+    """
+    Regenerate the last assistant response without adding a new user message.
+
+    Steps:
+    1. Validate that the last history entry is a user message.
+    2. Remove the last assistant message if present (prevents duplicate in history).
+    3. Call Claude fresh with the same conversation context.
+    4. Return the new reply with the same response shape as /chat.
+
+    This preserves:
+    - Full conversation context (all prior turns)
+    - Session store (dataset / query results)
+    - Dashboard context embedded in history
+    """
     if not payload.history:
         raise HTTPException(status_code=400, detail="history must not be empty for retry.")
 
+    # Walk backwards: find the last user message and strip any trailing assistant
+    # message so we don't send the old answer as context for the regeneration.
     clean_history = list(payload.history)
+
+    # Remove trailing assistant message(s) — they are the stale response being retried
     while clean_history and clean_history[-1].role == "assistant":
         clean_history.pop()
 
     if not clean_history or clean_history[-1].role != "user":
-        raise HTTPException(status_code=400, detail="No user message found to retry.")
+        raise HTTPException(
+            status_code=400,
+            detail="No user message found to retry. history must end with a user turn."
+        )
 
     last_user_msg = clean_history[-1].content
-    prior_history = clean_history[:-1]
+    prior_history = clean_history[:-1]   # everything before the last user message
 
-    has_prior_data = (
-        payload.session_id is not None
-        and payload.session_id in _SESSION_STORE
-    )
-    intent = classify_intent(last_user_msg, has_prior_data=has_prior_data)
-
-    print(f"🔄 [retry] session={payload.session_id} intent={intent} msg={last_user_msg[:80]}")
+    print(f"🔄 [retry] session={payload.session_id} retrying: {last_user_msg[:80]}")
 
     messages = [{"role": m.role, "content": m.content} for m in prior_history]
     messages.append({"role": "user", "content": last_user_msg})
 
     try:
-        reply = _call_claude(
-            messages,
-            session_id = payload.session_id,
-            model_hint = payload.model,
-            intent     = intent,
-        )
+        reply = _call_claude(messages, session_id=payload.session_id)
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Claude error on retry: {exc}")
 
     has_dataset = payload.session_id is not None and payload.session_id in _SESSION_STORE
     stored      = _SESSION_STORE.get(payload.session_id) if payload.session_id else None
-    funnel_data = _extract_funnel_data(reply)
-    chart_data  = _extract_chart_data(reply)
 
     return {
         "reply":         reply,
-        "intent":        intent,
         "has_dataset":   has_dataset,
         "dataset_rows":  stored.total_rows if stored else 0,
         "export_intent": "__EXPORT_INTENT__" in reply,
-        "funnel_data":   funnel_data,
-        "chart_data":    chart_data,
         "retried":       True,
     }
 
 
 # =============================================================================
-# Session info
+# Session info — lets the frontend know what's stored
 # =============================================================================
 @app.get("/session/{session_id}/dataset-info")
 def session_dataset_info(session_id: str):
@@ -1123,7 +956,7 @@ def session_dataset_info(session_id: str):
 
 
 # =============================================================================
-# Export preview
+# Export preview — generates AI narrative + injects full table
 # =============================================================================
 @app.post("/export/preview")
 async def export_preview(req: ExportPreviewRequest):
@@ -1131,6 +964,8 @@ async def export_preview(req: ExportPreviewRequest):
         raise HTTPException(status_code=400, detail="No conversation to export.")
 
     print(f"📄 [export/preview] session={req.session_id} type={req.export_type}")
+
+    # Fetch stored dataset (may be None for summary-only exports)
     stored = _get_result(req.session_id) if req.session_id else None
 
     try:
@@ -1157,16 +992,23 @@ async def export_preview(req: ExportPreviewRequest):
 
 
 # =============================================================================
-# Export download
+# Export download — PDF, PPTX, or CSV, all from session store
 # =============================================================================
 @app.post("/export/download")
 async def export_download(req: ExportDownloadRequest):
     print(f"⬇️  [export/download] format={req.format} session={req.session_id}")
 
+    # ── CSV: purely from session store, no AI involvement ────────────────
     if req.format == "csv":
         stored = _get_result(req.session_id) if req.session_id else None
         if not stored:
-            raise HTTPException(status_code=404, detail="No query result found for this session.")
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "No query result found for this session. "
+                    "Ask a deal-list question first, then export."
+                ),
+            )
         csv_bytes = _build_csv(stored)
         return StreamingResponse(
             io.BytesIO(csv_bytes),
@@ -1177,6 +1019,7 @@ async def export_download(req: ExportDownloadRequest):
             },
         )
 
+    # ── PDF / PPTX: from pre-generated content (passed from preview step) ─
     if not req.content:
         raise HTTPException(status_code=400, detail="content is required for PDF/PPTX export.")
 
@@ -1216,21 +1059,36 @@ def _strip_md(t: str) -> str:
     return t.strip()
 
 
+# =============================================================================
+# CSV builder — generates UTF-8 CSV from session store (all rows, no cap)
+# =============================================================================
 def _build_csv(stored: QueryResult) -> bytes:
     buf = io.StringIO()
+
+    # Metadata header
     buf.write(f"# Title: {stored.sql[:80]}\n")
     buf.write(f"# Generated: {date.today().isoformat()}\n")
     buf.write(f"# Total Records: {stored.total_rows}\n")
     buf.write(f"# Filters: {stored.filters_applied}\n")
     buf.write(f"# Captured at: {stored.captured_at}\n")
     buf.write("#\n")
-    writer = csv.DictWriter(buf, fieldnames=stored.columns, extrasaction="ignore", lineterminator="\n")
+
+    writer = csv.DictWriter(
+        buf,
+        fieldnames     = stored.columns,
+        extrasaction   = "ignore",
+        lineterminator = "\n",
+    )
     writer.writeheader()
-    for row in stored.rows:
+    for row in stored.rows:   # ALL rows from session store
         writer.writerow(row)
+
     return buf.getvalue().encode("utf-8")
 
 
+# =============================================================================
+# Export content generation
+# =============================================================================
 def _generate_export_content(
     conversation:    List[ChatMessage],
     title:           str,
@@ -1238,6 +1096,13 @@ def _generate_export_content(
     detail_level:    str = "detailed",
     stored_dataset:  Optional[QueryResult] = None,
 ) -> str:
+    """
+    Claude writes the narrative (summary, insights, recommendations).
+    The full deal table (if any) is injected directly from the session store —
+    not reconstructed from chat text, not subject to any token/row limits.
+    """
+
+    # Clean conversation: strip any old embedded JSON blocks from previous iterations
     conv_text = "\n\n".join(
         f"{'USER' if m.role == 'user' else 'DIUD AGENT'}: {m.content}"
         for m in conversation
@@ -1249,7 +1114,8 @@ def _generate_export_content(
         else "Format as a professional PDF report: ## section headers, narrative prose, tables."
     )
     detail_hint = (
-        "Include all metrics and insights. Write [DEAL_TABLE_PLACEHOLDER] where the full deal table should appear."
+        "Include all metrics and insights. The full deal table will be appended automatically — "
+        "just write a [DEAL_TABLE_PLACEHOLDER] marker where it should appear."
         if detail_level == "detailed"
         else "Executive summary only — key metrics and top insights, no raw deal list."
     )
@@ -1284,16 +1150,16 @@ REQUIREMENTS:
 Generate the document now:"""
 
     response = _ai_client.messages.create(
-        **_build_api_kwargs(
-            _DEFAULT_MODEL,
-            system  = "You are a professional business report writer. Generate clean, well-structured documents.",
-            messages= [{"role": "user", "content": prompt}],
-            temperature = 0,
-            max_tokens  = 4096,
-        )
+        model   = _CLAUDE_MODEL,
+        system  = "You are a professional business report writer. Generate clean, well-structured documents.",
+        messages= [{"role": "user", "content": prompt}],
+        temperature = 0,
+        max_tokens  = 4096,
     )
     ai_text = _extract_text(response.content)
 
+    # ── Inject full deal table from session store ──────────────────────────
+    # Claude is NOT trusted to reproduce the table — we do it ourselves.
     if stored_dataset and stored_dataset.total_rows > 0:
         table_md  = _rows_to_markdown_table(stored_dataset)
         meta_line = (
@@ -1312,15 +1178,19 @@ Generate the document now:"""
 
 
 def _rows_to_markdown_table(stored: QueryResult) -> str:
+    """Convert session-store rows to a markdown table (all rows, no cap)."""
     if not stored.rows:
         return "_No data._"
+
     cols   = stored.columns
     header = "| " + " | ".join(cols) + " |"
     sep    = "| " + " | ".join("---" for _ in cols) + " |"
     lines  = [header, sep]
-    for row in stored.rows:
+
+    for row in stored.rows:   # all rows from session store
         cells = [str(row.get(c, "")).replace("|", "\\|") for c in cols]
         lines.append("| " + " | ".join(cells) + " |")
+
     return "\n".join(lines)
 
 
@@ -1391,8 +1261,13 @@ def _parse_sections(text: str):
 
 
 def _build_pdf(title: str, report_text: str) -> bytes:
-    buf      = io.BytesIO()
-    styles   = _pdf_styles()
+    """
+    Build a PDF from markdown content.
+    Markdown tables (| col | col |) are rendered as native ReportLab tables
+    so that deal lists with many columns stay readable.
+    """
+    buf     = io.BytesIO()
+    styles  = _pdf_styles()
     sections = _parse_sections(report_text)
 
     def _on_page(canvas, doc):
@@ -1447,10 +1322,13 @@ def _build_pdf(title: str, report_text: str) -> bytes:
             ))
             story.append(Spacer(1, 6))
 
+            # Detect markdown table blocks vs normal lines
             lines = sec_body.split("\n")
             i = 0
             while i < len(lines):
                 line = lines[i].strip()
+
+                # Start of a markdown table
                 if line.startswith("|") and i + 1 < len(lines) and "---" in lines[i + 1]:
                     table_lines = []
                     while i < len(lines) and lines[i].strip().startswith("|"):
@@ -1459,6 +1337,7 @@ def _build_pdf(title: str, report_text: str) -> bytes:
                     story.append(_md_table_to_rl(table_lines, styles))
                     story.append(Spacer(1, 6))
                     continue
+
                 if not line:
                     story.append(Spacer(1, 3))
                 elif line.startswith("### "):
@@ -1478,9 +1357,10 @@ def _build_pdf(title: str, report_text: str) -> bytes:
 
 
 def _md_table_to_rl(table_lines: list, styles: dict):
+    """Convert markdown table lines to a ReportLab Table element."""
     data = []
     for idx, line in enumerate(table_lines):
-        if "---" in line:
+        if "---" in line:    # separator row — skip
             continue
         cells = [c.strip().replace("\\|", "|") for c in line.strip("|").split("|")]
         if idx == 0:
@@ -1588,6 +1468,7 @@ def _build_pptx(title: str, slide_text: str) -> bytes:
             if k in t: return c
         return _C_BLUE_P
 
+    # Cover
     cover = prs.slides.add_slide(blank)
     _pptx_bg(cover, _C_NAVY_P)
     _pptx_rect(cover, 0, 3.2, 13.33, 0.06, _C_BLUE_P)
