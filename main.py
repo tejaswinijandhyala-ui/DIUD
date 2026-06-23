@@ -334,67 +334,244 @@ CORE RULES:
 - Answer in clean markdown with tables for data, bold for key numbers.
 
 =================================================================
-TARGET TABLES — QUOTAS, ATTAINMENT & GOVERNANCE
+TARGET TABLES — EXACT SCHEMA, TIER LOGIC & SQL RULES
 =================================================================
-Use these tables for any question about targets, quotas, attainment,
-coverage, EOP, or pipeline governance.
 
-── TABLE T1: kore_ai_hubspot.gs_pipeline_quotas_v1 ─────────────
-PURPOSE: Global pipeline targets and quotas (org-wide).
-USE FOR:
-  • Revenue targets and pipeline targets
-  • EOP (End-of-Period) target tracking
-  • Quarterly / FY performance comparisons
-  • Attainment calculations: actual ÷ quota
-  • Gap-to-target analysis
-QUERY NOTES:
-  • Always GROUP BY + SUM for quota values (multiple rows per period)
-  • Join to hs_analytics.deals FINAL on fiscal period / region / stage
-    to compute attainment percentages
+TARGET TIER DEFAULT RULE — CRITICAL
+─────────────────────────────────────────────────────────────────
+There are three target tiers: L2 (base), L1 (stretch), Committed.
+DEFAULT: Always use L2 targets unless the user explicitly says L1 or Committed.
 
-── TABLE T2: kore_ai_hubspot.gs_partner_targets_region_wise ─────
-PURPOSE: Region-level partner targets.
-USE FOR:
-  • Regional partner performance analysis
-  • Partner pipeline contribution by region
-  • Region-wise quota tracking
-  • Partner attainment metrics vs regional targets
+COLUMN NAMING CONVENTION (applies across ALL target tables):
+  • L2 targets  → no prefix:            Amount_Target_20, Deals_Target_20
+  • L1 targets  → L1_ prefix:           L1_Amount_Target_20, L1_Deals_Target_20
+  • Committed   → Committed_ prefix:    Committed_Amount_Target_20, Committed_Deals_Target_20
 
-── TABLE T3: kore_ai_hubspot.gs_partner_targets_psd ─────────────
-PURPOSE: Partner-level PSD (Partner Sales Director) targets.
-USE FOR:
-  • PSD-level performance tracking
-  • Partner contribution analysis at PSD granularity
-  • PSD quota attainment
-  • Partner pipeline governance metrics
+When user says "target" or "quota" with no qualifier → use the NO-PREFIX columns (L2).
+When user says "L1" or "stretch" → use L1_ columns.
+When user says "committed" → use Committed_ columns.
 
-── TABLE T4: kore_ai_hubspot.gs_marketing_targets ───────────────
-(Already listed as TABLE 6 — same table, additional context below)
-USE FOR:
-  • Marketing-sourced pipeline analysis
-  • Campaign target tracking
-  • Marketing contribution vs targets
-  • Funnel performance (MQL → opportunity)
-QUERY NOTES:
-  • Always: SELECT region, mql_source, SUM(mql_target)
-    FROM kore_ai_hubspot.gs_marketing_targets GROUP BY region, mql_source
+─────────────────────────────────────────────────────────────────
+TABLE T1: kore_ai_hubspot.gs_pipeline_quotas_v1
+PURPOSE : Org-wide pipeline targets by region, source, and funnel stage.
+USE FOR : Pipeline attainment, EOP tracking, coverage ratio, gap-to-target.
+─────────────────────────────────────────────────────────────────
+COLUMNS:
+  FY                          String   — e.g. 'FY27'
+  Quarter                     String   — e.g. 'Q1'
+  Month                       String   — e.g. '2026-04'
+  Monthly_Share               Float64  — month's share of quarterly target
+  Quarterly_Share             Float64  — quarter's share of annual target
+  Region                      String   — 'North America','EMEA','ISEA','Global'
+  Regional_Share              Float64  — region's share of global target
+  Source                      String   — deal source rollup
+  Source_Share                Float64  — source's share of regional target
 
-── TABLE T5: kore_ai_hubspot.gs_closed_won_quotas ───────────────
-PURPOSE: Closed Won amount quotas and global pipeline governance targets.
-USE FOR:
-  • Closed Won attainment: actual won ÷ closed_won_quota
-  • Global pipeline governance reporting
-  • Revenue realization tracking
-  • Forecast vs actual analysis
-QUERY NOTES:
-  • Join to hs_analytics.deals FINAL where deal_stage = 'Closed Won'
-    on period / region to compute attainment %
+  ── L2 targets (DEFAULT — use these unless told otherwise) ──
+  Amount_Target_20            Float64  — pipeline $ target at 20%+ stage
+  Deals_Target_20             Float64  — deal count target at 20%+ stage
+  Amount_Target_10            Float64  — pipeline $ target at 10%+ stage
+  Deals_Target_10             Float64  — deal count target at 10%+ stage
+  Amount_Target_5             Float64  — pipeline $ target at 5%+ stage
+  Deals_Target_5              Float64  — deal count target at 5%+ stage
 
-ATTAINMENT FORMULA (standard):
-  attainment_pct = round(actual_value / target_value * 100, 1)
+  ── L1 targets (use only if user says "L1" or "stretch") ──
+  Amount_Target_20_L1         Float64
+  Deals_Target_20_L1          Float64
+  Amount_Target_10_L1         Float64
+  Deals_Target_10_L1          Float64
+  Amount_Target_5_L1          Float64
+  Deals_Target_5_L1           Float64
 
-COVERAGE RATIO FORMULA:
-  coverage_ratio = round(pipeline_value / revenue_target, 1)
+  ── Committed targets (use only if user says "committed") ──
+  Amount_Target_20_committed  Float64
+  Deals_Target_20_committed   Float64
+  Amount_Target_10_committed  Float64
+  Deals_Target_10_committed   Float64
+  Amount_Target_5_committed   Float64
+  Deals_Target_5_committed    Float64
+
+─────────────────────────────────────────────────────────────────
+TABLE T2: kore_ai_hubspot.gs_partner_targets_region_wise
+PURPOSE : Region-level partner pipeline targets by partner type.
+USE FOR : Partner pipeline attainment by region, hyperscaler vs non-hyperscaler splits.
+─────────────────────────────────────────────────────────────────
+COLUMNS:
+  FY                          String
+  Quarter                     String
+  Month                       String
+  Region                      String
+  regional_split              Float64
+  Partner_Team                String   — partner team name
+  Partner_Team_Type           String   — e.g. 'Hyperscaler', 'GSI/SI', 'Reseller/BPO/TSD'
+  Hyperscaler_Type            String   — 'AWS', 'MSFT', or null
+  Amount_PK                   Float64  — primary key amount (total partner target)
+
+  ── L2 targets (DEFAULT) ──
+  L2_Amount_Target_20         Float64
+  L2_Deals_Target_20          Float64
+  L2_Amount_Target_10         Float64
+  L2_Deals_Target_10          Float64
+  L2_Amount_Target_5          Float64
+  L2_Deals_Target_5           Float64
+
+  ── L1 targets ──
+  L1_Amount_Target_20         Float64
+  L1_Deals_Target_20          Float64
+  L1_Amount_Target_10         Float64
+  L1_Deals_Target_10          Float64
+  L1_Amount_Target_5          Float64
+  L1_Deals_Target_5           Float64
+
+  ── Committed targets ──
+  Committed_Amount_Target_20  Float64
+  Committed_Deals_Target_20   Float64
+  Committed_Amount_Target_10  Float64
+  Committed_Deals_Target_10   Float64
+  Committed_Amount_Target_5   Float64
+  Committed_Deals_Target_5    Float64
+
+  ── Hyperscaler C1 targets (specific to AWS / MSFT deals) ──
+  MSFT_C1_Targets_20          Float64  — MSFT C1 deal count target at 20%
+  AWS_C1_Targets_20           Float64  — AWS C1 deal count target at 20%
+  MSFT_C1_Amount_Target_20    Float64  — MSFT C1 $ target at 20%
+  AWS_C1_Amount_Target_20     Float64  — AWS C1 $ target at 20%
+  MSFT_C1_Targets_10          Float64
+  AWS_C1_Targets_10           Float64
+  MSFT_C1_Targets_5           Float64
+  AWS_C1_Targets_5            Float64
+
+NOTE: This table has extra trailing columns from the source sheet (FK, %share, etc.)
+      — ignore those; they are sheet artefacts, not queryable metrics.
+
+─────────────────────────────────────────────────────────────────
+TABLE T3: kore_ai_hubspot.gs_partner_targets_psd
+PURPOSE : PSD (Partner Sales Director) level partner pipeline targets.
+USE FOR : PSD quota attainment, individual PSD performance vs target.
+─────────────────────────────────────────────────────────────────
+COLUMNS:
+  FY                          String
+  Quarter                     String
+  Month                       String
+  Region                      String
+  Partner_Team                String
+  PSD                         String   — Partner Sales Director name
+  Hyperscaler_Type            String   — 'AWS', 'MSFT', or null
+
+  ── L2 targets (DEFAULT) ──
+  L2_Amount_Target_20         Float64
+  L2_Deals_Target_20          Float64
+  L2_Amount_Target_10         Float64
+  L2_Deals_Target_10          Float64
+  L2_Amount_Target_5          Float64
+  L2_Deals_Target_5           Float64
+
+  ── L1 targets ──
+  L1_Amount_Target_20         Float64
+  L1_Deals_Target_20          Float64
+  L1_Amount_Target_10         Float64
+  L1_Deals_Target_10          Float64
+  L1_Amount_Target_5          Float64
+  L1_Deals_Target_5           Float64
+
+  Amount_Primary_Key          Float64  — total PSD target (primary key)
+
+  ── Committed targets ──
+  Committed_Amount_Target_20  Float64
+  Committed_Deals_Target_20   Float64
+  Committed_Amount_Target_10  Float64
+  Committed_Deals_Target_10   Float64
+  Committed_Amount_Target_5   Float64
+  Committed_Deals_Target_5    Float64
+
+─────────────────────────────────────────────────────────────────
+TABLE T4: kore_ai_hubspot.gs_marketing_targets
+PURPOSE : Marketing MQL and pipeline targets by source.
+USE FOR : MQL attainment, marketing-sourced pipeline vs target, funnel analysis.
+─────────────────────────────────────────────────────────────────
+COLUMNS:
+  FY                          String
+  Quarter                     String
+  Month                       String
+  Monthly_Share               Float64
+  Quarterly_Share             Float64
+  Region                      String
+  Regional_Share              Float64
+  Original_Source             String   — maps to contacts.original_source / deals.deal_source_rollup
+  Source_Share                Float64
+
+  ── L2 targets (DEFAULT) ──
+  Amount_Target_20            Float64  — marketing pipeline $ at 20%+
+  Deals_Target_20             Float64
+  Amount_Target_10            Float64
+  Deals_Target_10             Float64
+  Amount_Target_5             Float64
+  Deals_Target_5              Float64
+  mql_target                  Float64  — MQL count target (L2 default)
+
+  ── L1 targets ──
+  L1_mql_target               Float64
+  L1_Deals_Target_20          Float64
+  L1_Deals_Target_10          Float64
+  L1_Deals_Target_5           Float64
+
+NOTE: No Committed tier in this table. For MQL queries, JOIN to
+      hs_analytics.contacts on region + original_source + month.
+      Always: GROUP BY region, Original_Source + SUM(mql_target)
+
+─────────────────────────────────────────────────────────────────
+TABLE T5: kore_ai_hubspot.gs_closed_won_quotas
+PURPOSE : Closed Won revenue quotas by AE, manager, region.
+USE FOR : CW attainment %, forecast vs actual, AE-level quota tracking.
+─────────────────────────────────────────────────────────────────
+COLUMNS:
+  fy                          String   — e.g. 'FY27'
+  quarter                     String   — e.g. 'Q1'
+  month                       String   — e.g. '2026-04'
+  region                      String
+  ae                          String   — AE name (join to deals.deal_owner)
+  role                        String   — AE role/tier
+  manager                     String   — AE's manager name
+  assigned_amount_quota       Float64  — quarterly CW $ quota for this AE
+  assigned_deals_quota        Float64  — quarterly CW deal count quota
+  annualized_amount_quota     Float64  — annualized CW $ quota
+  annualized_deals_quota      Float64  — annualized deal count quota
+
+NOTE: Only one quota tier (no L1/L2/Committed split).
+      To compute attainment: JOIN to deals where deal_stage = 'Closed Won'
+      on ae = deal_owner, matching fy + quarter. Aggregate each side first —
+      never join raw deal rows to raw quota rows before summing.
+
+=================================================================
+TARGETS SQL RULES (apply to ALL target tables)
+=================================================================
+1. DEFAULT TIER = L2. Only switch if user explicitly says L1 or Committed.
+2. NEVER join raw deal rows directly to a target table then SUM —
+   fan-out inflates targets by N× (one quota row matched N deal rows).
+3. CORRECT PATTERN — two independent CTEs, then combine:
+
+   WITH actual AS (
+     SELECT region, SUM(amount) AS achieved
+     FROM hs_analytics.deals FINAL
+     WHERE 
+     GROUP BY region
+   ),
+   target AS (
+     SELECT region, SUM(Amount_Target_20) AS target_val   -- L2 default
+     FROM kore_ai_hubspot.gs_pipeline_quotas_v1
+     WHERE 
+     GROUP BY region
+   )
+   SELECT actual.achieved, target.target_val,
+          round(actual.achieved / target.target_val * 100, 1) AS attainment_pct
+   FROM actual JOIN target USING (region)
+
+4. Always GROUP BY + SUM on target tables — never read a single raw row.
+5. Match period grain: quarterly actuals → quarterly target filter.
+6. ATTAINMENT = round(actual / target * 100, 1)
+7. COVERAGE   = round(pipeline / revenue_target, 1)
+8. For partner tables: filter Partner_Team_Type to isolate
+   Hyperscaler vs GSI/SI vs Reseller/BPO/TSD as needed.
 
 =================================================================
 DASHBOARD DEFINITIONS — CONTEXT & KPI LOGIC
