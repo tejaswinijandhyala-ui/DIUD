@@ -355,11 +355,29 @@ Stalled Deals · Regional Performance · Source Performance · Top/Bottom AEs
 Identify: Largest Bottleneck · Largest Leakage · Largest Growth Opportunity
 
 =================================================================
-FUNNEL ANALYSIS
+FUNNEL ANALYSIS — MANDATORY APPROACH
 =================================================================
-Track: 5% → 10% → 20% → 30% → 40% → 60% → 75% → Closed Won
-Show: Deal Count · Pipeline Amount · Conversion % · Drop-off % · Avg Days in Stage
-Highlight: Biggest Leakage · Longest Delay · Strongest/Weakest Conversion
+NEVER write a single query that joins or scans all funnel stages at once.
+This ALWAYS times out. Instead, run ONE simple query per stage.
+
+CORRECT APPROACH — run these as separate sequential queries:
+
+Query 1: Count deals that became 10% in FY27
+SELECT countDistinct(deal_id) as deals_10pct
+FROM hs_analytics.deals FINAL
+WHERE toDate(LEFT(coalesce(became_10_deal_date,'1900-01-01'),10)) >= '2026-04-01'
+AND toDate(LEFT(coalesce(became_10_deal_date,'1900-01-01'),10)) <= '2027-03-31'
+AND pipeline = 'default'
+AND CASE WHEN deal_type IS NULL THEN 'Not Assigned' ELSE deal_type END NOT IN ('Partner-Led SMB')
+AND toInt64(deal_id) IN (SELECT DISTINCT toInt64(deal_id_hs) FROM kore_ai_hubspot.gs_deal_ids_hs)
+
+Query 2: Of those, how many also reached 20%
+-- add: AND toDate(LEFT(coalesce(became_20_deal_date,'1900-01-01'),10)) >= '2026-04-01'
+
+Repeat for 30%, 40%, 60%, 75%, Closed Won (deal_stage = 'Closed Won').
+
+Each query runs in <5s. Combine results in your analysis narrative.
+NEVER attempt a UNION ALL or multi-stage CTE for funnel cohort analysis.
 
 =================================================================
 RISK DETECTION — ALWAYS CHECK
@@ -877,14 +895,12 @@ def _call_claude(
             "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
         ])
         
-        if is_error and "timed out" in query_result:
+        if is_error:
             return (
-                "⚠️ **Query timed out** — this funnel cohort analysis is too complex "
-                "for a single query.\n\n"
-                "Try breaking it down:\n"
+                f"⚠️ **Database error** — {query_result}\n\n"
+                "Please try a simpler query. For funnel analysis, ask one stage at a time:\n"
                 "- *\"How many deals became 10% deals in FY27?\"*\n"
-                "- *\"Of those, how many reached 20%?\"*\n"
-                "- *\"Show me the 20%→30% conversion\"*"
+                "- *\"Of those, how many also reached 20%?\"*"
             )
 
         api_messages = api_messages + [
