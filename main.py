@@ -993,8 +993,7 @@ def _extract_text(content_blocks) -> str:
     ).strip()
 
 
-def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[str] = None) -> str:
-    """Run Claude with query_clickhouse tool. Up to 5 tool rounds."""
+def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[str] = None, model: str = "sonnet") -> str:
     
     selected_model = ALLOWED_MODELS.get(model, ALLOWED_MODELS["sonnet"])
 
@@ -1054,7 +1053,7 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
 
         is_last_round = (round_num == MAX_ROUNDS - 1)
         response = _ai_client.messages.create(
-            model=_CLAUDE_MODEL,
+            model=selected_model,
             system=_SYSTEM_PROMPT,
             messages=safe_messages,
             # On the final round, withhold tools so Claude is forced to
@@ -1178,6 +1177,7 @@ class RetryRequest(BaseModel):
     """
     history:    List[ChatMessage] = []
     session_id: Optional[str] = None
+    model:      str = "sonnet" 
 
 
 @app.post("/chat/retry")
@@ -1452,7 +1452,7 @@ REQUIREMENTS:
 Generate the document now:"""
 
     response = _ai_client.messages.create(
-        model   = _CLAUDE_MODEL,
+        model=selected_model,
         system  = "You are a professional business report writer. Generate clean, well-structured documents.",
         messages= [{"role": "user", "content": prompt}],
         temperature = 0,
