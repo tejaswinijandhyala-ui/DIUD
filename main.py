@@ -565,12 +565,12 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
                 f"{base_url}/query",
                 headers=_auth_headers(),
                 json={"query": sql},
-                timeout=60,
+                timeout=120,
             )
         except httpx.ConnectError as e:
             return f"DATABASE CONNECTION FAILED: Could not reach {base_url}. {e}"
         except httpx.TimeoutException:
-            return "DATABASE ERROR: Query timed out after 60 s."
+            return "DATABASE ERROR: Query timed out after 120 s."
 
         if resp.status_code == 401:
             return "DATABASE CONNECTION FAILED: 401 Unauthorized."
@@ -774,10 +774,16 @@ def _build_api_kwargs(model: str, **kwargs) -> dict:
 # Text extraction helper
 # =============================================================================
 def _extract_text(content_blocks) -> str:
-    return "\n".join(
-        b.text for b in content_blocks if hasattr(b, "text") and b.text
-    ).strip()
-
+    if not content_blocks:
+        return ""
+    parts = []
+    for b in content_blocks:
+        if hasattr(b, "text") and b.text:
+            parts.append(b.text)
+        elif hasattr(b, "type") and b.type == "tool_use":
+            # Claude stopped mid-tool — shouldn't happen but handle gracefully
+            parts.append(f"⚠️ Query was interrupted. Please try again.")
+    return "\n".join(parts).strip()
 
 # =============================================================================
 # ── THE CRITICAL FIX ──────────────────────────────────────────────────────────
@@ -870,6 +876,16 @@ def _call_claude(
         is_error = any(query_result.startswith(p) for p in [
             "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
         ])
+        
+        if is_error and "timed out" in query_result:
+            return (
+                "⚠️ **Query timed out** — this funnel cohort analysis is too complex "
+                "for a single query.\n\n"
+                "Try breaking it down:\n"
+                "- *\"How many deals became 10% deals in FY27?\"*\n"
+                "- *\"Of those, how many reached 20%?\"*\n"
+                "- *\"Show me the 20%→30% conversion\"*"
+            )
 
         api_messages = api_messages + [
             {"role": "assistant", "content": response.content},
