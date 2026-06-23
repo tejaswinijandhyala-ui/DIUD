@@ -52,7 +52,11 @@ app.add_middleware(
 # Claude client
 # =============================================================================
 _ai_client    = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-_CLAUDE_MODEL = "claude-sonnet-4-5"
+_CLAUDE_MODEL = "claude-sonnet-4-5"   # fallback default, still used by export
+ALLOWED_MODELS = {
+    "sonnet": "claude-sonnet-4-5",
+    "opus":   "claude-opus-4-5",
+}
 
 # =============================================================================
 # SERVER-SIDE SESSION STORE
@@ -629,6 +633,29 @@ Stage-to-column mapping:
 Answer in clean markdown. Use tables for data. Bold key numbers.
 Never fabricate numbers. Never run destructive SQL.
 
+FILTER CONFIRMATION RULE — MANDATORY
+
+After every database-backed answer, ALWAYS append the following section:
+
+---
+Filters Applied:
+- <list all detected filters>
+
+Please verify these filters are correct.
+Would you like any changes to the filters before I continue the analysis?
+---
+
+Examples:
+
+Filters Applied:
+- FY27
+- Region: North America
+- Stage: 20% Deals
+- Deal Source: Partner
+
+Please verify these filters are correct.
+Would you like any changes to the filters before I continue the analysis?
+
 =================================================================
 8. SAMPLE QUESTIONS & QUERY GUIDANCE FOR DIUD
 =================================================================
@@ -693,6 +720,64 @@ NEW LOGO vs RENEWAL:
 
   Q: "Renewal pipeline at risk?"
   → deal_type LIKE '%Renewal%' + active pipeline filters
+  
+=================================================================
+9. VISUAL / CHART GENERATION RULES
+=================================================================
+When producing a chart or visual summary, output it as an HTML
+block inside a fenced code block tagged as "html". Do NOT use
+ASCII art, monospace characters, repeated box symbols, or emoji
+(🏆🔴🟡) as data indicators. Use real CSS colored elements.
+
+BAR CHART — use this exact structure, fill in values:
+```html
+<div style="background:#0D1B3E;border-radius:12px;padding:20px 24px;
+            font-family:Inter,system-ui,sans-serif;color:white;max-width:560px;">
+  <div style="font-size:11px;font-weight:600;letter-spacing:.8px;
+              text-transform:uppercase;color:#546E7A;margin-bottom:16px;">
+    CHART TITLE
+  </div>
+
+  <!-- Repeat this block for each row: -->
+  <div style="margin-bottom:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+      <span style="font-size:12.5px;color:#B0BEC5;">ROW LABEL</span>
+      <span style="font-size:13px;font-weight:600;color:white;">VALUE</span>
+    </div>
+    <div style="height:8px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden;">
+      <div style="height:100%;width:PCT%;background:linear-gradient(90deg,#1565C0,#1E88E5);
+                  border-radius:4px;"></div>
+    </div>
+  </div>
+
+  <div style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,.08);
+              font-size:10.5px;color:#546E7A;">
+    SOURCE / FILTER CONTEXT
+  </div>
+</div>
+```
+
+KPI CARDS — use for metric summaries (3-4 numbers side by side):
+```html
+<div style="display:flex;flex-wrap:wrap;gap:12px;margin:8px 0;">
+  <div style="background:#0D1B3E;border-radius:10px;padding:16px 20px;
+              min-width:130px;flex:1;border:1px solid rgba(255,255,255,.07);">
+    <div style="font-size:10px;font-weight:600;text-transform:uppercase;
+                letter-spacing:.6px;color:#546E7A;margin-bottom:6px;">METRIC</div>
+    <div style="font-size:22px;font-weight:700;color:white;">VALUE</div>
+    <div style="font-size:11px;color:#4CAF50;margin-top:4px;">▲ CHANGE</div>
+  </div>
+</div>
+```
+
+RULES:
+1. PCT = round((row_value / max_row_value) * 100, 1). Always compute this.
+2. Attainment bar color: ≥100% use #4CAF50 (green), 75-99% use #FFA726 (amber),
+   <75% use #EF5350 (red). Change the background gradient on the inner div.
+3. Positive delta text: color #4CAF50. Negative: color #EF5350.
+4. Every chart must have a title (top) and a source/filter line (bottom).
+5. Never output trophy or circle emojis as performance signals.
+
 """
 
 _SYSTEM_PROMPT = _build_system_prompt()
@@ -883,6 +968,7 @@ class ChatRequest(BaseModel):
     message: str
     history: List[ChatMessage] = []
     session_id: Optional[str] = None
+    model: str = "sonnet"
 
 class ExportPreviewRequest(BaseModel):
     conversation: List[ChatMessage] = []
@@ -909,6 +995,8 @@ def _extract_text(content_blocks) -> str:
 
 def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[str] = None) -> str:
     """Run Claude with query_clickhouse tool. Up to 5 tool rounds."""
+    
+    selected_model = ALLOWED_MODELS.get(model, ALLOWED_MODELS["sonnet"])
 
     # Strip tool_use/tool_result blocks from history (can't replay them)
     safe_messages = []
@@ -927,7 +1015,7 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
             safe_messages.append({"role": m["role"], "content": content})
 
     response = _ai_client.messages.create(
-        model=_CLAUDE_MODEL,
+        model=selected_model,
         system=_SYSTEM_PROMPT,
         messages=safe_messages,
         tools=[_QUERY_TOOL],
@@ -1056,7 +1144,7 @@ def chat(payload: ChatRequest):
     print(f"💬 [chat] session={payload.session_id} msg={payload.message[:80]}")
 
     try:
-        reply = _call_claude(messages, session_id=payload.session_id)
+        reply = _call_claude(messages, session_id=payload.session_id, model=payload.model)
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Claude error: {exc}")
