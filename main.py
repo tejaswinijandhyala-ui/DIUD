@@ -804,7 +804,7 @@ def _extract_text(content_blocks) -> str:
 # =============================================================================
 
 def _call_claude(
-    messages: list,          # plain [{role, content:str}] from the frontend
+    messages: list,
     max_tokens: int = 8192,
     session_id: Optional[str] = None,
     model_hint: Optional[str] = None,
@@ -813,14 +813,9 @@ def _call_claude(
     model = _resolve_model(model_hint)
     print(f"🤖 model={model} intent={intent} session={session_id}")
 
-    # Build a clean API message list from plain-text history.
-    # This is the ONLY place we touch the Anthropic API messages array.
-    # Tool exchanges are added BELOW inside the loop — never from history.
     api_messages = []
     for m in messages:
         content = m.get("content", "")
-        # Safety: if content is somehow a list (shouldn't happen from frontend),
-        # flatten it to text only — never pass raw tool blocks from history.
         if isinstance(content, list):
             text_parts = [
                 b.get("text", "") if isinstance(b, dict) else (b.text if hasattr(b, "text") else "")
@@ -829,18 +824,16 @@ def _call_claude(
                    or (hasattr(b, "type") and b.type == "text")
             ]
             content = "\n".join(t for t in text_parts if t).strip()
-        if content:  # skip empty messages
+        if content:
             api_messages.append({"role": m["role"], "content": content})
 
-    # tool_choice strategy:
-    #   data_query → "any"  (force Claude to call the tool on first turn)
-    #   everything else → "auto" (Claude decides; safe for greetings/general)
-    #
-    # IMPORTANT: after the first turn, ALL subsequent turns use "auto" so that
-    # Claude can either call another tool or produce a final text response.
-    # Using "any" after a tool_result causes another 400 error.
+    # ── FIX: data_query never needs history — Claude re-queries DB fresh ──
+    # History carrying broken tool_use state from a prior failed turn is the
+    # sole root cause of the 400 errors. Strip it for data queries entirely.
+    if intent == "data_query":
+        api_messages = [m for m in api_messages if m["role"] == "user"][-1:]
+
     first_tool_choice = {"type": "any"} if intent == "data_query" else {"type": "auto"}
-    is_first_turn = True
 
     print(f"   first tool_choice={first_tool_choice['type']}")
 
@@ -856,11 +849,6 @@ def _call_claude(
         )
     )
 
-    # Tool-use loop — up to 5 rounds.
-    # Each iteration correctly appends:
-    #   1. The assistant message (which may contain tool_use blocks)
-    #   2. A user message with the matching tool_result block
-    # This guarantees the required pairing that the API enforces.
     for _ in range(5):
         if response.stop_reason != "tool_use":
             break
@@ -874,14 +862,15 @@ def _call_claude(
         print(sql)
         print("===================================\n")
 
-        query_result = run_clickhouse_query(sql, session_id=session_id)
+        try:
+            query_result = run_clickhouse_query(sql, session_id=session_id)
+        except Exception as e:
+            query_result = f"DATABASE ERROR: Unexpected exception: {e}"
+
         is_error = any(query_result.startswith(p) for p in [
             "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
         ])
 
-        # ── Correctly append assistant turn + tool result ──────────────────
-        # response.content is the raw list of content blocks (text + tool_use).
-        # We pass it as-is so the API gets the exact tool_use id it expects.
         api_messages = api_messages + [
             {"role": "assistant", "content": response.content},
             {"role": "user", "content": [{
@@ -892,18 +881,21 @@ def _call_claude(
             }]},
         ]
 
-        # All turns after the first MUST use "auto" — not "any".
-        response = _ai_client.messages.create(
-            **_build_api_kwargs(
-                model,
-                system      = _SYSTEM_PROMPT,
-                messages    = api_messages,
-                tools       = [_QUERY_TOOL],
-                tool_choice = {"type": "auto"},
-                temperature = 0,
-                max_tokens  = max_tokens,
+        try:
+            response = _ai_client.messages.create(
+                **_build_api_kwargs(
+                    model,
+                    system      = _SYSTEM_PROMPT,
+                    messages    = api_messages,
+                    tools       = [_QUERY_TOOL],
+                    tool_choice = {"type": "auto"},
+                    temperature = 0,
+                    max_tokens  = max_tokens,
+                )
             )
-        )
+        except Exception as e:
+            partial = _extract_text(response.content)
+            return partial or f"⚠️ API error after tool call: {e}"
 
     reply = _extract_text(response.content)
     if not reply:
