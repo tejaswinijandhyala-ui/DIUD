@@ -719,21 +719,23 @@ def _extract_text(content_blocks) -> str:
 def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[str] = None) -> str:
     """Run Claude with query_clickhouse tool. Up to 5 tool rounds."""
 
-    # Strip tool_use/tool_result blocks from history (can't replay them)
+    # Strip any tool_use/tool_result blocks from incoming history
     safe_messages = []
     for m in messages:
         content = m.get("content", "")
         if isinstance(content, list):
             text_parts = [
                 b.get("text", "") if isinstance(b, dict) else (b.text if hasattr(b, "text") else "")
-                for b in content if (isinstance(b, dict) and b.get("type") == "text")
-                   or (hasattr(b, "type") and b.type == "text")
+                for b in content
+                if (isinstance(b, dict) and b.get("type") == "text")
+                or (hasattr(b, "type") and b.type == "text")
             ]
             text = "\n".join(t for t in text_parts if t).strip()
             if text:
                 safe_messages.append({"role": m["role"], "content": text})
         else:
-            safe_messages.append({"role": m["role"], "content": content})
+            if content:
+                safe_messages.append({"role": m["role"], "content": content})
 
     response = _ai_client.messages.create(
         model=_CLAUDE_MODEL,
@@ -745,6 +747,7 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
     )
 
     for _ in range(5):
+        # Exit if no tool call requested
         if response.stop_reason != "tool_use":
             break
 
@@ -752,19 +755,41 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
         if not tool_block:
             break
 
-        sql          = tool_block.input.get("sql", "")
+        sql = tool_block.input.get("sql", "")
         query_result = run_clickhouse_query(sql, session_id=session_id)
-        is_error     = any(query_result.startswith(p) for p in [
+        is_error = any(query_result.startswith(p) for p in [
             "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
         ])
 
+        # Serialize assistant content blocks to plain dicts before appending.
+        # This avoids SDK object references that may not survive re-serialization
+        # and ensures the tool_use block is always immediately followed by tool_result.
+        assistant_content = []
+        for b in response.content:
+            if b.type == "tool_use":
+                assistant_content.append({
+                    "type": "tool_use",
+                    "id": b.id,
+                    "name": b.name,
+                    "input": b.input,
+                })
+            elif b.type == "text" and b.text:
+                assistant_content.append({
+                    "type": "text",
+                    "text": b.text,
+                })
+
+        # Only extend safe_messages if we have actual content to pair
+        if not assistant_content:
+            break
+
         safe_messages = safe_messages + [
-            {"role": "assistant", "content": response.content},
+            {"role": "assistant", "content": assistant_content},
             {"role": "user", "content": [{
-                "type":        "tool_result",
+                "type": "tool_result",
                 "tool_use_id": tool_block.id,
-                "content":     query_result,
-                "is_error":    is_error,
+                "content": query_result,
+                "is_error": is_error,
             }]},
         ]
 
@@ -779,6 +804,7 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
 
     reply = _extract_text(response.content)
     if not reply:
+        # If Claude only produced tool_use blocks with no text, extract from last tool result
         reply = "⚠️ No response generated. Check **/debug/db** to diagnose connectivity."
     return reply
 
