@@ -744,7 +744,10 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
         max_tokens=max_tokens,
     )
 
-    for _ in range(5):
+    MAX_ROUNDS = 8
+    last_error = None
+
+    for round_num in range(MAX_ROUNDS):
         if response.stop_reason != "tool_use":
             break
 
@@ -757,6 +760,8 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
         is_error     = any(query_result.startswith(p) for p in [
             "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
         ])
+        if is_error:
+            last_error = query_result
 
         safe_messages = safe_messages + [
             {"role": "assistant", "content": response.content},
@@ -768,18 +773,36 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
             }]},
         ]
 
+        is_last_round = (round_num == MAX_ROUNDS - 1)
         response = _ai_client.messages.create(
             model=_CLAUDE_MODEL,
             system=_SYSTEM_PROMPT,
             messages=safe_messages,
-            tools=[_QUERY_TOOL],
+            # On the final round, withhold tools so Claude is forced to
+            # summarize in text instead of issuing yet another tool call.
+            tools=[] if is_last_round else [_QUERY_TOOL],
             temperature=0,
             max_tokens=max_tokens,
         )
 
     reply = _extract_text(response.content)
+
     if not reply:
-        reply = "⚠️ No response generated. Check **/debug/db** to diagnose connectivity."
+        # Still empty even after forcing a text-only round. This means the
+        # model returned no text at all (rare) — surface the real cause
+        # instead of a generic "connectivity" message.
+        if last_error:
+            reply = (
+                "⚠️ I couldn't complete this query. The last database error was:\n\n"
+                f"`{last_error[:400]}`\n\n"
+                "Could you rephrase the question, or check **/debug/db** if this persists?"
+            )
+        else:
+            reply = (
+                "⚠️ I wasn't able to finish answering this in time — it may need "
+                "a more specific or simpler question. Could you try rephrasing it "
+                "(e.g. break it into smaller asks)?"
+            )
     return reply
 
 
