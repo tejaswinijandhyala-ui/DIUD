@@ -502,6 +502,28 @@ DASHBOARD SELECTION RULE:
 If the user mentions a specific dashboard by name, apply its metric
 definitions and target table references automatically. If unclear,
 ask the user which dashboard context they want.
+
+=================================================================
+UNKNOWN TABLE COLUMNS — ALWAYS INSPECT FIRST
+=================================================================
+For these quota/target tables, you do NOT know the column names.
+NEVER guess column names. ALWAYS run a LIMIT 1 first:
+
+  SELECT * FROM kore_ai_hubspot.gs_closed_won_quotas LIMIT 1
+  SELECT * FROM kore_ai_hubspot.gs_pipeline_quotas_v1 LIMIT 1
+  SELECT * FROM kore_ai_hubspot.gs_partner_targets_region_wise LIMIT 1
+  SELECT * FROM kore_ai_hubspot.gs_partner_targets_psd LIMIT 1
+  SELECT * FROM kore_ai_hubspot.gs_marketing_targets LIMIT 1
+
+WORKFLOW FOR QUOTA QUESTIONS:
+  Step 1: SELECT * FROM <quota_table> LIMIT 1  ← see actual columns
+  Step 2: Build your aggregation using ONLY those confirmed columns
+  Step 3: Never use assumed names like 'quota', 'target', 'amount'
+
+If step 1 itself returns a DB error, relay the error to the user
+and STOP. Do not attempt step 2.
+=================================================================
+
 """
 
 _SYSTEM_PROMPT = _build_system_prompt()
@@ -747,61 +769,69 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
     )
 
     for _ in range(5):
-        # Exit if no tool call requested
-        if response.stop_reason != "tool_use":
-            break
+    if response.stop_reason != "tool_use":
+        break
 
-        tool_block = next((b for b in response.content if b.type == "tool_use"), None)
-        if not tool_block:
-            break
+    tool_block = next((b for b in response.content if b.type == "tool_use"), None)
+    if not tool_block:
+        break
 
-        sql = tool_block.input.get("sql", "")
-        query_result = run_clickhouse_query(sql, session_id=session_id)
-        is_error = any(query_result.startswith(p) for p in [
-            "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
-        ])
+    sql = tool_block.input.get("sql", "")
+    query_result = run_clickhouse_query(sql, session_id=session_id)
+    is_error = any(query_result.startswith(p) for p in [
+        "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
+    ])
 
-        # Serialize assistant content blocks to plain dicts before appending.
-        # This avoids SDK object references that may not survive re-serialization
-        # and ensures the tool_use block is always immediately followed by tool_result.
-        assistant_content = []
-        for b in response.content:
-            if b.type == "tool_use":
-                assistant_content.append({
-                    "type": "tool_use",
-                    "id": b.id,
-                    "name": b.name,
-                    "input": b.input,
-                })
-            elif b.type == "text" and b.text:
-                assistant_content.append({
-                    "type": "text",
-                    "text": b.text,
-                })
-
-        # Only extend safe_messages if we have actual content to pair
-        if not assistant_content:
-            break
-
-        safe_messages = safe_messages + [
-            {"role": "assistant", "content": assistant_content},
-            {"role": "user", "content": [{
-                "type": "tool_result",
-                "tool_use_id": tool_block.id,
-                "content": query_result,
-                "is_error": is_error,
-            }]},
-        ]
-
-        response = _ai_client.messages.create(
-            model=_CLAUDE_MODEL,
-            system=_SYSTEM_PROMPT,
-            messages=safe_messages,
-            tools=[_QUERY_TOOL],
-            temperature=0,
-            max_tokens=max_tokens,
+    # Tell Claude to stop retrying on errors
+    tool_result_content = query_result
+    if is_error:
+        tool_result_content = (
+            f"{query_result}\n\n"
+            "STOP. Do NOT run another SQL query. "
+            "Explain this error to the user in plain text and stop."
         )
 
+    assistant_content = []
+    for b in response.content:
+        if b.type == "tool_use":
+            assistant_content.append({
+                "type": "tool_use",
+                "id": b.id,
+                "name": b.name,
+                "input": b.input,
+            })
+        elif b.type == "text" and b.text:
+            assistant_content.append({
+                "type": "text",
+                "text": b.text,
+            })
+
+    if not assistant_content:
+        break
+
+    safe_messages = safe_messages + [
+        {"role": "assistant", "content": assistant_content},
+        {"role": "user", "content": [{
+            "type": "tool_result",
+            "tool_use_id": tool_block.id,
+            "content": tool_result_content,  # ← changed from query_result
+            "is_error": is_error,
+        }]},
+    ]
+
+    response = _ai_client.messages.create(
+        model=_CLAUDE_MODEL,
+        system=_SYSTEM_PROMPT,
+        messages=safe_messages,
+        tools=[_QUERY_TOOL],
+        temperature=0,
+        max_tokens=max_tokens,
+    )
+
+    # Hard break after any DB error — don't loop again
+    if is_error:
+        break
+        
     reply = _extract_text(response.content)
     if not reply:
         # If Claude only produced tool_use blocks with no text, extract from last tool result
