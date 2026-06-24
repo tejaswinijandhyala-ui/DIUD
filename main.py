@@ -1029,26 +1029,30 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
         if response.stop_reason != "tool_use":
             break
 
-        tool_block = next((b for b in response.content if b.type == "tool_use"), None)
-        if not tool_block:
+        tool_blocks = [b for b in response.content if b.type == "tool_use"]
+        if not tool_blocks:
             break
 
-        sql          = tool_block.input.get("sql", "")
-        query_result = run_clickhouse_query(sql, session_id=session_id)
-        is_error     = any(query_result.startswith(p) for p in [
-            "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
-        ])
-        if is_error:
-            last_error = query_result
+        tool_result_blocks = []
+        for tool_block in tool_blocks:
+            sql          = tool_block.input.get("sql", "")
+            query_result = run_clickhouse_query(sql, session_id=session_id)
+            is_error     = any(query_result.startswith(p) for p in [
+                "DATABASE CONNECTION FAILED", "ERROR:", "DATABASE ERROR:"
+            ])
+            if is_error:
+                last_error = query_result
 
-        safe_messages = safe_messages + [
-            {"role": "assistant", "content": response.content},
-            {"role": "user", "content": [{
+            tool_result_blocks.append({
                 "type":        "tool_result",
                 "tool_use_id": tool_block.id,
                 "content":     query_result,
                 "is_error":    is_error,
-            }]},
+            })
+
+        safe_messages = safe_messages + [
+            {"role": "assistant", "content": response.content},
+            {"role": "user", "content": tool_result_blocks},
         ]
 
         is_last_round = (round_num == MAX_ROUNDS - 1)
