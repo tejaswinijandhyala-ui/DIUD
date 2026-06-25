@@ -700,7 +700,6 @@
     <div class="sidebar-label">📥 Export</div>
     <button class="suggestion-chip" onclick="sendSuggestion('Export this conversation as a PDF report')">📄 Export as PDF report</button>
     <button class="suggestion-chip" onclick="sendSuggestion('Create a presentation from this conversation')">📊 Create a presentation</button>
-    <button class="suggestion-chip" onclick="sendSuggestion('Download a summary of today\'s analysis')">📋 Download summary</button>
 
     <!-- Connection status -->
     <div id="conn-badge" class="conn-badge checking" style="margin-top:auto;"
@@ -1346,10 +1345,8 @@ marked.setOptions({ breaks: true, gfm: true, renderer });
       document.getElementById("ep-format").value = preselectedFormat;
     }
 
-    // Fill title from context (first user message or default)
-    if (history.length > 0 && document.getElementById("ep-title").value === "Pipeline Intelligence Report") {
-      // keep default
-    }
+    // Auto-trigger preview generation so download button appears immediately
+    setTimeout(() => generatePreview(), 300);
   }
 
   function closeExportPanel() {
@@ -1369,7 +1366,18 @@ marked.setOptions({ breaks: true, gfm: true, renderer });
   }
 
   function hideFooter()  { document.getElementById("ep-footer").classList.add("hidden"); }
-  function showFooter()  { document.getElementById("ep-footer").classList.remove("hidden"); }
+function showFooter()  { 
+    document.getElementById("ep-footer").classList.remove("hidden");
+    // Ensure at least one download button is visible
+    const fmt = document.getElementById("ep-format").value;
+    if (fmt === "pdf") {
+        document.getElementById("ep-dl-pdf").style.display  = "flex";
+        document.getElementById("ep-dl-pptx").style.display = "none";
+    } else if (fmt === "pptx") {
+        document.getElementById("ep-dl-pdf").style.display  = "none";
+        document.getElementById("ep-dl-pptx").style.display = "flex";
+    }
+}
 
   /* ======================================================================
      GENERATE PREVIEW
