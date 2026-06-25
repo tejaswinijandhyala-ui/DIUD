@@ -1014,7 +1014,7 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
             safe_messages.append({"role": m["role"], "content": content})
 
     response = _ai_client.messages.create(
-        model=selected_model,
+        model=_CLAUDE_MODEL,
         system=_SYSTEM_PROMPT,
         messages=safe_messages,
         tools=[_QUERY_TOOL],
