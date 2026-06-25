@@ -1435,25 +1435,45 @@ def _generate_export_content(
             f"The complete table will be injected at [DEAL_TABLE_PLACEHOLDER]."
         )
 
+    # Extract the last user instruction about what they want in the export
+    last_user_instructions = ""
+    for m in reversed(conversation):
+        if m.role == "user":
+            last_user_instructions = m.content
+            break
+
     prompt = f"""You are preparing a professional {export_type.upper()} export document.
 
-CONVERSATION:
+CONVERSATION (full context):
 {conv_text}
 {dataset_hint}
 
 TASK: Create "{title}"
 
+CRITICAL INSTRUCTION — READ CAREFULLY:
+The user's most recent request was: "{last_user_instructions}"
+
+You must honour EXACTLY what the user asked for. Do NOT impose a generic template.
+- If the user said "just the output from my question" → reproduce only the data/analysis from the conversation, no boilerplate sections
+- If the user said "win rate analysis" → structure the document around win rates only
+- If the user said "executive summary" → write only an executive summary
+- If the user said "show me the deals table" → just include the deal table with minimal narrative
+- If the user gave NO specific instruction → use logical sections based on what was actually discussed
+
+ADAPT the document structure to match what was discussed in the conversation.
+Only include sections that are relevant to the actual conversation content.
+Do NOT add sections like "Recommendations" or "Insights" unless the conversation actually contains those.
+
 {format_hint}
 {detail_hint}
 
-REQUIREMENTS:
-- Executive summary at the start with key numbers
-- Logical sections: summary, key metrics, insights, recommendations
-- If this is a deal list export, include [DEAL_TABLE_PLACEHOLDER] where the full table belongs
-- Bold key numbers; clean professional tone
+ADDITIONAL RULES:
+- If this is a deal list export, include [DEAL_TABLE_PLACEHOLDER] where the table belongs
+- Bold key numbers; clean professional tone  
 - Today: {date.today().strftime('%B %d, %Y')}
+- Mirror the data and language from the conversation — do not fabricate or add context not present
 
-Generate the document now:"""
+Generate the document now, shaped around what was actually asked:"""
 
     response = _ai_client.messages.create(
         model=_CLAUDE_MODEL,
