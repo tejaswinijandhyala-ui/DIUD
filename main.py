@@ -1,3 +1,4 @@
+
 import csv
 import io
 import json
@@ -5,7 +6,7 @@ import os
 import re
 import traceback
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Dict, List, Literal, Optional
 
 import httpx
@@ -52,38 +53,50 @@ app.add_middleware(
 # Claude client
 # =============================================================================
 _ai_client    = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-_CLAUDE_MODEL = "claude-sonnet-4-5"   # fallback default, still used by export
+_CLAUDE_MODEL = "claude-sonnet-4-6"
 ALLOWED_MODELS = {
-    "sonnet": "claude-sonnet-4-5",
-    "opus":   "claude-opus-4-5",
+    "sonnet": "claude-sonnet-4-6",
+    "opus":   "claude-opus-4-6",
 }
+
+# FIX 1: Increased max_tokens across all call sites
+# Chat responses: 4096 → handles long analytical responses without mid-sentence cut
+# Export generation: 6144 → handles full reports with large deal tables
+CHAT_MAX_TOKENS   = 4096
+EXPORT_MAX_TOKENS = 6144
 
 # =============================================================================
 # SERVER-SIDE SESSION STORE
-# Keeps the last query result per session so export endpoints can always
-# access the full raw dataset — no JSON embedding in messages, no truncation.
-# Key  : session_id (UUID string, generated once per browser tab)
-# Value: QueryResult dict with full rows + metadata
 # =============================================================================
-
 class QueryResult:
-    """Holds the full raw result of the most recent ClickHouse query in a session."""
     def __init__(self, sql: str, columns: List[str], rows: List[dict],
                  total_rows: int, captured_at: str, filters_applied: str = ""):
-        self.sql            = sql
-        self.columns        = columns
-        self.rows           = rows          # ALL rows, no cap
-        self.total_rows     = total_rows
-        self.captured_at    = captured_at
+        self.sql             = sql
+        self.columns         = columns
+        self.rows            = rows
+        self.total_rows      = total_rows
+        self.captured_at     = captured_at
         self.filters_applied = filters_applied
 
-_SESSION_STORE: Dict[str, QueryResult] = {}   # session_id → QueryResult
+
+import threading
+
+_SESSION_STORE:      Dict[str, QueryResult] = {}
+_SESSION_TIMESTAMPS: Dict[str, datetime]    = {}
 
 def _store_result(session_id: str, result: QueryResult):
-    _SESSION_STORE[session_id] = result
+    _SESSION_STORE[session_id]      = result
+    _SESSION_TIMESTAMPS[session_id] = datetime.utcnow()
 
-def _get_result(session_id: str) -> Optional[QueryResult]:
-    return _SESSION_STORE.get(session_id)
+def _cleanup_sessions():
+    cutoff  = datetime.utcnow() - timedelta(hours=4)
+    expired = [sid for sid, ts in list(_SESSION_TIMESTAMPS.items()) if ts < cutoff]
+    for sid in expired:
+        _SESSION_STORE.pop(sid, None)
+        _SESSION_TIMESTAMPS.pop(sid, None)
+    if expired:
+        print(f"🧹 Cleaned {len(expired)} expired sessions.")
+    threading.Timer(3600, _cleanup_sessions).start()
 
 
 # =============================================================================
@@ -181,8 +194,8 @@ def discover_schema() -> str:
             col_lines = []
             for col in cols:
                 if isinstance(col, dict):
-                    col_name = col.get("name") or col.get("column_name") or col.get("Field") or list(col.keys())[0]
-                    col_type = col.get("type") or col.get("data_type") or col.get("Type") or ""
+                    col_name    = col.get("name") or col.get("column_name") or col.get("Field") or list(col.keys())[0]
+                    col_type    = col.get("type") or col.get("data_type") or col.get("Type") or ""
                     col_comment = col.get("comment") or col.get("Comment") or ""
                     col_lines.append(f"  {col_name:<35} {col_type}" + (f"  — {col_comment}" if col_comment else ""))
                 else:
@@ -473,6 +486,8 @@ NOTE: Single quota tier only — no L1/L2/Committed split.
 
 6.  Match period grain: if actuals are for Q1 FY27, filter target table
     to fy = 'FY27' AND quarter = 'Q1'.
+    NEVER divide annual target by 4 to get quarterly target.
+    ALWAYS filter the target table by the specific quarter: WHERE fy='FY27' AND quarter='Q1'
 
 7.  ATTAINMENT = round(actual / nullIf(target, 0) * 100, 1)
     COVERAGE   = round(pipeline / nullIf(revenue_target, 0), 1)
@@ -484,14 +499,55 @@ NOTE: Single quota tier only — no L1/L2/Committed split.
     performance use gs_partner_targets_region_wise.
 
 =================================================================
-6. DASHBOARD DEFINITIONS
+6. MQL CALCULATION RULES — MANDATORY
+=================================================================
+When computing MQL actuals from hs_analytics.contacts FINAL, ALWAYS apply
+ALL THREE of these filters together. Missing any one produces inflated counts.
+
+MANDATORY MQL FILTERS:
+  1. lifecycle_stage = 'marketingqualifiedlead'
+     AND date_entered_marketing_qualified_lead_lifecycle_stage_pipeline IS NOT NULL
+  2. company_priority IN ('P1','P2','P3','P4','P5','P6','P7')
+     — excludes contacts with no company priority (unqualified / unknown accounts)
+  3. lead_status != 'Bad Data'
+     — excludes records flagged as dirty / invalid by the ops team
+
+CORRECT MQL ACTUALS PATTERN:
+  SELECT
+    region,
+    original_source,
+    toYYYYMM(toDate(LEFT(date_entered_marketing_qualified_lead_lifecycle_stage_pipeline,10))) AS ym,
+    countDistinct(contact_id) AS mql_count
+  FROM hs_analytics.contacts FINAL
+  WHERE lifecycle_stage = 'marketingqualifiedlead'
+    AND date_entered_marketing_qualified_lead_lifecycle_stage_pipeline IS NOT NULL
+    AND company_priority IN ('P1','P2','P3','P4','P5','P6','P7')
+    AND lead_status != 'Bad Data'
+    AND <date range filter on date_entered_... column>
+  GROUP BY region, original_source, ym
+
+MQL TARGET PATTERN — always filter by exact quarter, NEVER divide annual by 4:
+  SELECT
+    region,
+    original_source,
+    SUM(toFloat64OrZero(mql_target)) AS mql_tgt
+  FROM kore_ai_hubspot.gs_marketing_targets
+  WHERE fy = 'FY27' AND quarter = 'Q1'   -- ← ALWAYS use quarter filter
+  GROUP BY region, original_source
+
+FILTER CONFIRMATION: After any MQL query, always state in the Filters Applied block:
+  - Company Priority: P1–P7 (excludes unranked contacts)
+  - Lead Status: excludes 'Bad Data'
+  - MQL date range: <the date range used>
+
+=================================================================
+7. DASHBOARD DEFINITIONS
 =================================================================
 When a user asks about a specific dashboard, apply the correct logic below.
 If unclear, ask the user which dashboard context they want.
 
 ── DASHBOARD 1: EOP (End-of-Period) DASHBOARD ──────────────────
-PURPOSE: Tracks pipeline health and attainment against EOP targets
-at the end of each fiscal quarter.
+PURPOSE: Tracks pipeline health and attainment against EOP targets.
 
 KEY METRICS:
   • EOP Pipeline Value — total amount of active deals within EOP date window
@@ -503,66 +559,25 @@ KEY METRICS:
 FILTERS: Mandatory base filters + close_date within current quarter end
 window + deal_stage IN active stages (20%–75%) + pipeline = 'default'
 
-TYPICAL QUERIES: "EOP pipeline vs target for Q2 FY27", "EOP attainment
-by region", "Gap to EOP target this quarter"
-
 ── DASHBOARD 2: EXEC KPI DASHBOARD ─────────────────────────────
-PURPOSE: Senior leadership view of pipeline performance, win rates,
-and revenue attainment across all regions.
+PURPOSE: Senior leadership view of pipeline performance.
 
 KEY METRICS:
-  • Total Active Pipeline ($M) — sum(amount) on active deals
-  • Closed Won ($M) — sum(amount) where deal_stage = 'Closed Won'
+  • Total Active Pipeline ($M)
+  • Closed Won ($M)
   • Closed Won Attainment % — Closed Won ÷ gs_closed_won_quotas × 100
   • Win Rate % — Closed Won ÷ (Closed Won + Closed Lost) × 100
   • Pipeline Coverage — Active Pipeline ÷ Revenue Target
-  • New Logo Count — countDistinct(deal_id) where deal_type = 'New Logo'
-  • ACV Weighted Pipeline — (stage_probability × amount) summed
-
-FILTERS: Mandatory base filters + FY27 date range on close_date +
-exclude deal_stage IN ('Closed Won','Closed Lost') for active pipeline
-
-TYPICAL QUERIES: "Executive KPI summary for FY27", "Closed Won
-attainment vs quota by region", "Win rate trend by quarter"
+  • New Logo Count
 
 ── DASHBOARD 3: CS (Customer Success) DASHBOARD ────────────────
-PURPOSE: Tracks existing customer pipeline — renewals, upsells,
-expansions — and CS team performance.
-
-KEY METRICS:
-  • Renewal Pipeline ($M) — deals where deal_type LIKE '%Renewal%'
-  • Upsell / Expansion Pipeline ($M) — deal_type LIKE '%Upsell%' or LIKE '%Expansion%'
-  • Renewal Win Rate % — Closed Won renewals ÷ total renewals × 100
-  • Net Revenue Retention (NRR) — (Renewals + Upsells) ÷ Base ARR
-  • At-Risk Deals — active deals with stale last_contacted date
-  • CS AE Performance — pipeline/closed won by owner filtered to CS team
-
-FILTERS: Mandatory base filters + deal_type IN ('Renewal','Upsell','Expansion') + FY27
-
-TYPICAL QUERIES: "CS renewal pipeline for FY27", "Upsell attainment
-by AE", "At-risk renewals this quarter"
+PURPOSE: Tracks renewals, upsells, expansions and CS team performance.
 
 ── DASHBOARD 4: GLOBAL PIPELINE GOVERNANCE DASHBOARD ───────────
-PURPOSE: Executive governance view comparing pipeline across all
-regions, sources, and partner types against global targets.
-
-KEY METRICS:
-  • Global Pipeline by Region ($M) — broken down by region + stage
-  • Partner Pipeline ($M) — deals from partner sources (deal_source_rollup LIKE '%Partner%')
-  • Partner Attainment % — vs gs_partner_targets_region_wise
-  • Partner PSD Attainment % — vs gs_partner_targets_psd
-  • Pipeline Coverage Ratio — by region vs gs_pipeline_quotas_v1
-  • Closed Won Governance — actual vs gs_closed_won_quotas by region/quarter
-  • Marketing Sourced Pipeline — deals from marketing sources vs gs_marketing_targets
-
-FILTERS: Mandatory base filters + FY27 date range + appropriate partner
-source filters for partner metrics
-
-TYPICAL QUERIES: "Global pipeline governance report for FY27",
-"Partner pipeline attainment by region", "Closed Won vs quota by quarter"
+PURPOSE: Executive governance view across all regions, sources, partner types.
 
 =================================================================
-7. CORE BUSINESS RULES
+8. CORE BUSINESS RULES
 =================================================================
 
 ── FISCAL YEAR ──────────────────────────────────────────────────
@@ -571,7 +586,6 @@ FY27 = Apr 2026 – Mar 2027. Default to FY27 unless user specifies.
   Q3: Oct–Dec 2026  |  Q4: Jan–Mar 2027
 
 FY calculation: if month >= 4, FY = year + 1, else FY = year.
-Example: Oct 2026 → FY27. Jan 2027 → FY27. Apr 2027 → FY28.
 
 ── REGION MAPPING (display only — use in SELECT, not WHERE) ──────
   japac        → JAPAC
@@ -598,14 +612,6 @@ Only apply deal_stage filter for active pipeline IF the user explicitly
 asks for "active" pipeline. Do not assume active unless stated.
 
 ── REGISTERED DEALS (REG DEALS) DEFINITION ──────────────────────
-For registered/created deals filtered to a specific funnel stage,
-the entry date is the became_[stage]_deal_date for that stage,
-NOT the deal create_date.
-
-Example: "Deals that became 20% in Q1 FY27"
-  → Filter on became_20_deal_date between '2026-04-01' and '2026-06-30'
-  → Also apply deal_stage filter for that stage if user asks for active
-
 Stage-to-column mapping:
   5%  → became_5_deal_date
   10% → became_10_deal_date
@@ -620,18 +626,18 @@ Stage-to-column mapping:
 2.  FINAL on all hs_analytics tables.
 3.  Apply all 3 mandatory base filters on every deals query.
 4.  For LIST queries: NO LIMIT unless user says "top N" or "first N".
-    Return ALL matching rows — the system handles display safely.
 5.  countDistinct(deal_id) for unique deal counts, never count().
 6.  round(sum(amount)/1e6, 1) for $M amounts.
 7.  Dates: toDate(LEFT(coalesce(col,'1900-01-01'),10))
-8.  Always tell the user the TOTAL row count (e.g. "Found 256 deals").
+8.  Always tell the user the TOTAL row count.
 9.  NEVER use numbers from memory or cache. Every metric must be
-    queried live from the database. Never state a count, amount,
-    or percentage without running a query first.
+    queried live from the database.
 
 ── RESPONSE FORMAT ───────────────────────────────────────────────
 Answer in clean markdown. Use tables for data. Bold key numbers.
 Never fabricate numbers. Never run destructive SQL.
+COMPLETE your full response — never stop mid-sentence or mid-table.
+If the response is long, finish all sections before ending.
 
 FILTER CONFIRMATION RULE — MANDATORY
 
@@ -645,23 +651,78 @@ Please verify these filters are correct.
 Would you like any changes to the filters before I continue the analysis?
 ---
 
-Examples:
+=================================================================
+9. VISUAL / CHART GENERATION RULES
+=================================================================
+When the data returned from a query is best understood visually,
+generate a Chart.js chart as a self-contained HTML block inside
+a fenced code block tagged as `html`.
 
-Filters Applied:
-- FY27
-- Region: North America
-- Stage: 20% Deals
-- Deal Source: Partner
+WHEN TO GENERATE A CHART:
+- Pipeline by stage, region, source, industry → bar chart
+- Win/loss ratios, source mix, deal type split → pie or donut
+- Conversion funnel (stage progression) → funnel (trapezoid SVG or Chart.js bar)
+- Trends over time, monthly pipeline → line chart
+- AE performance comparison → horizontal bar chart
+- Attainment vs target → grouped bar or gauge
 
-Please verify these filters are correct.
-Would you like any changes to the filters before I continue the analysis?
+MANDATORY COLOR RULE — MOST IMPORTANT:
+Every bar, slice, segment, or funnel stage MUST get its OWN distinct
+color from this palette. NEVER use one color for all items.
+NEVER use flat single-color bars. The palette:
+  ["#4E79A7","#F28E2B","#E15759","#76B7B2","#59A14F",
+   "#EDC948","#B07AA1","#FF9DA7","#9C755F","#BAB0AC"]
+Cycle through this list when there are more than 10 items.
+
+CHART QUALITY RULES:
+1. Use Chart.js 4.4.1 from cdnjs.cloudflare.com — no other charting lib.
+2. Background MUST be white (#fff) with a light border — never dark navy.
+3. Include a chart title and subtitle (filter context) above the canvas.
+4. Build a custom HTML legend below or above the chart — disable Chart.js
+   default legend. Each legend item shows a color swatch + label + value.
+5. Every canvas needs role="img" and a descriptive aria-label.
+6. Wrap canvas in a div with position:relative and explicit pixel height.
+7. Load Chart.js UMD script first, then your plain <script> after.
+8. Never use type="module" in script tags.
+9. For horizontal bar charts, set indexAxis:'y' and size the wrapper
+   height to (number_of_bars * 44 + 80) pixels.
+10. Format Y-axis tick labels: values ≥1M → "$X.XM", ≥1K → "$XK".
+11. Show value labels on bars/slices where space allows using a
+    tooltip callback or datalabels if space permits.
+12. ALWAYS generate the COMPLETE HTML in one pass — never truncate.
+
+CHART TYPE SELECTION:
+- ≤6 categories with part-of-whole meaning → donut chart
+- >6 categories or comparisons → horizontal bar chart
+- Funnel/conversion → trapezoid shapes using inline SVG or
+  a bar chart sorted descending with each bar a different color
+- Time series with ≥4 data points → line chart with filled area
+- Two metrics side by side (actual vs target) → grouped bar chart
+
+FUNNEL CHART SPECIFIC RULE:
+For conversion funnels, render each stage as a centered trapezoid using inline SVG.
+MANDATORY: Every bar must have a minimum width of 18% of total container width —
+never scale bars to zero or near-zero even if deal count is 1.
+Width formula: Math.max((deals / maxDeals) * 88, 18) + '%'
+Top edge of each trapezoid = bottom width of the previous stage.
+Show deal count + $ amount inside or beside each bar in white text.
+
+DATA LABELING:
+- Bar charts: show the value above or inside each bar in the same
+  color as the bar (darkened) or white if inside a dark segment.
+- Pie/donut: show percentage in the legend, not inside slices.
+- Funnel: show count + conversion % next to each stage.
+- Always round: counts → integers, amounts → 1 decimal $M,
+  percentages → 1 decimal %.
+
+COMPLETENESS RULE:
+Generate ALL chart HTML in a single code block. Do not write partial
+HTML then continue in prose. If multiple charts are needed for one
+response, generate ALL of them completely before ending your reply.
 
 =================================================================
-8. SAMPLE QUESTIONS & QUERY GUIDANCE FOR DIUD
+10. SAMPLE QUESTIONS & QUERY GUIDANCE FOR DIUD
 =================================================================
-The following examples show what the user might ask and what filters
-or logic DIUD must apply. Use these to calibrate interpretation.
-
 ACTIVE PIPELINE:
   Q: "What is our active pipeline for FY27?"
   → deal_stage IN ('20% - Solution','30% - Proof','40% - Proposal',
@@ -669,129 +730,564 @@ ACTIVE PIPELINE:
     AND close_date BETWEEN '2026-04-01' AND '2027-03-31'
     + mandatory base filters
 
-  Q: "Show me active pipeline by region"
-  → Same as above, GROUP BY region
-
 REG / COHORT DEALS:
   Q: "How many deals became 20% in Q1 FY27?"
   → Filter on became_20_deal_date BETWEEN '2026-04-01' AND '2026-06-30'
-    Do NOT use close_date. Do NOT apply deal_stage filter unless user
-    also says "active".
-
-  Q: "Show me deals that entered 40% stage this quarter"
-  → Filter on became_40_deal_date in current quarter range
 
 CLOSED WON:
   Q: "What is our Closed Won for FY27 by AE?"
   → deal_stage = 'Closed Won'
     AND close_date BETWEEN '2026-04-01' AND '2027-03-31'
-    GROUP BY deal_owner
-    + mandatory base filters
+    GROUP BY deal_owner + mandatory base filters
+
+MQL:
+  Q: "MQL actuals vs target for Q1 FY27?"
+  → Actuals from contacts with ALL THREE mandatory MQL filters
+    Target from gs_marketing_targets WHERE fy='FY27' AND quarter='Q1'
+    NEVER divide by 4 to get quarterly target
 
 TARGETS & ATTAINMENT:
   Q: "Pipeline attainment vs target by region for Q1 FY27?"
   → Use CTE pattern: actual CTE from deals, target CTE from
-    gs_pipeline_quotas_v1 WHERE fy='FY27' AND quarter='Q1',
-    JOIN on fy, quarter, month, deal source, region, compute attainment %
-
-  Q: "Partner pipeline vs target?"
-  → Actual from deals WHERE deal_source_rollup LIKE '%Partner%'
-    Target from gs_partner_targets_region_wise
-
-  Q: "AE quota attainment?"
-  → Actual Closed Won from deals, quota from gs_closed_won_quotas
-    JOIN on deal_owner = ae
-
-MQL / MARKETING:
-  Q: "MQL actuals vs target by source?"
-  → Actuals from hs_analytics.contacts FINAL, counting on
-    date_entered_marketing_qualified_lead_lifecycle_stage_pipeline
-    Targets from gs_marketing_targets
-    JOIN on region + original_source + month
-
-INDUSTRY / REGION DISPLAY:
-  Q: "Pipeline by industry?"
-  → Use kore_primary_industry column, apply industry mapping in
-    SELECT (CASE WHEN) for display grouping, not in WHERE
-
-NEW LOGO vs RENEWAL:
-  Q: "New logo pipeline this FY?"
-  → deal_type = 'New Logo' + active pipeline filters
-
-  Q: "Renewal pipeline at risk?"
-  → deal_type LIKE '%Renewal%' + active pipeline filters
-  
-=================================================================
-9. VISUAL / CHART GENERATION RULES
-=================================================================
-When producing a chart or visual summary, output it as an HTML
-block inside a fenced code block tagged as "html". Do NOT use
-ASCII art, monospace characters, repeated box symbols, or emoji
-(🏆🔴🟡) as data indicators. Use real CSS colored elements.
-
-BAR CHART — use this exact structure, fill in values:
-```html
-<div style="background:#0D1B3E;border-radius:12px;padding:20px 24px;
-            font-family:Inter,system-ui,sans-serif;color:white;max-width:560px;">
-  <div style="font-size:11px;font-weight:600;letter-spacing:.8px;
-              text-transform:uppercase;color:#546E7A;margin-bottom:16px;">
-    CHART TITLE
-  </div>
-
-  <!-- Repeat this block for each row: -->
-  <div style="margin-bottom:14px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
-      <span style="font-size:12.5px;color:#B0BEC5;">ROW LABEL</span>
-      <span style="font-size:13px;font-weight:600;color:white;">VALUE</span>
-    </div>
-    <div style="height:8px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden;">
-      <div style="height:100%;width:PCT%;background:linear-gradient(90deg,#1565C0,#1E88E5);
-                  border-radius:4px;"></div>
-    </div>
-  </div>
-
-  <div style="margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,.08);
-              font-size:10.5px;color:#546E7A;">
-    SOURCE / FILTER CONTEXT
-  </div>
-</div>
-```
-
-KPI CARDS — use for metric summaries (3-4 numbers side by side):
-```html
-<div style="display:flex;flex-wrap:wrap;gap:12px;margin:8px 0;">
-  <div style="background:#0D1B3E;border-radius:10px;padding:16px 20px;
-              min-width:130px;flex:1;border:1px solid rgba(255,255,255,.07);">
-    <div style="font-size:10px;font-weight:600;text-transform:uppercase;
-                letter-spacing:.6px;color:#546E7A;margin-bottom:6px;">METRIC</div>
-    <div style="font-size:22px;font-weight:700;color:white;">VALUE</div>
-    <div style="font-size:11px;color:#4CAF50;margin-top:4px;">▲ CHANGE</div>
-  </div>
-</div>
-```
-
-RULES:
-1. PCT = round((row_value / max_row_value) * 100, 1). Always compute this.
-2. Attainment bar color: ≥100% use #4CAF50 (green), 75-99% use #FFA726 (amber),
-   <75% use #EF5350 (red). Change the background gradient on the inner div.
-3. Positive delta text: color #4CAF50. Negative: color #EF5350.
-4. Every chart must have a title (top) and a source/filter line (bottom).
-5. Never output trophy or circle emojis as performance signals.
+    gs_pipeline_quotas_v1 WHERE fy='FY27' AND quarter='Q1'
 
 """
 
 _SYSTEM_PROMPT = _build_system_prompt()
 
 # =============================================================================
-# ClickHouse query runner — stores full result in session, returns display text
+# SQL Guard Rail — validates every query before hitting ClickHouse
+# Built from system prompt rules: Sections 3, 4, 5, 6, 8
+# =============================================================================
+
+def _validate_sql_guardrail(sql: str) -> tuple[bool, str]:
+    """
+    Hard-blocks SQL that violates business rules.
+    Claude sees the returned error as tool output and self-corrects automatically
+    in the next round of the tool loop.
+
+    Returns: (is_valid, error_message)
+    """
+    sql_upper = sql.upper().strip()
+    errors    = []
+
+    # =========================================================================
+    # RULE 1: hs_analytics tables MUST use FINAL
+    # Source: Section 3 — "ALWAYS use FINAL keyword"
+    #         Section 8 Query Rules — "FINAL on all hs_analytics tables"
+    # =========================================================================
+    HS_TABLES = ['DEALS', 'OWNERS', 'COMPANIES', 'CONTACTS']
+    for tbl in HS_TABLES:
+        full_ref = f'HS_ANALYTICS.{tbl}'
+        if full_ref in sql_upper:
+            # Check FINAL appears immediately after the table name
+            # Allows optional alias between table and FINAL
+            has_final = bool(re.search(
+                rf'HS_ANALYTICS\.{tbl}\s+FINAL',
+                sql_upper
+            ))
+            if not has_final:
+                errors.append(
+                    f"RULE VIOLATION — MISSING FINAL KEYWORD:\n"
+                    f"  Table 'hs_analytics.{tbl.lower()}' must be queried with FINAL.\n"
+                    f"  Correct syntax: FROM hs_analytics.{tbl.lower()} FINAL\n"
+                    f"  Reason: hs_analytics uses ClickHouse MergeTree engine. Without FINAL,\n"
+                    f"  multiple versions of the same row are returned, causing:\n"
+                    f"  - Inflated deal counts (same deal counted 2-5x)\n"
+                    f"  - Wrong pipeline totals\n"
+                    f"  - Incorrect win rates and attainment %\n"
+                    f"  Fix: Add FINAL after every hs_analytics table reference."
+                )
+
+    # =========================================================================
+    # RULE 2: deals queries MUST have ALL 3 mandatory base filters
+    # Source: Section 3 — "MANDATORY BASE FILTERS (apply to every deals query)"
+    #         Section 8 Query Rules — "Apply all 3 mandatory base filters"
+    # =========================================================================
+    if 'HS_ANALYTICS.DEALS' in sql_upper:
+
+        # Filter A: pipeline = 'default'
+        if not re.search(r"PIPELINE\s*=\s*'DEFAULT'", sql_upper):
+            errors.append(
+                "RULE VIOLATION — MISSING MANDATORY BASE FILTER A:\n"
+                "  Every deals query must include: WHERE pipeline = 'default'\n"
+                "  Reason: Multiple pipelines exist. Without this filter,\n"
+                "  non-default pipeline deals pollute all metrics.\n"
+                "  Fix: Add pipeline = 'default' to your WHERE clause."
+            )
+
+        # Filter B: Partner-Led SMB exclusion
+        # Checks for the CASE WHEN pattern OR a simpler deal_type exclusion
+        has_partner_smb_filter = (
+            ('PARTNER' in sql_upper and 'SMB' in sql_upper) or
+            ("PARTNER-LED SMB" in sql_upper) or
+            ("PARTNER_LED_SMB" in sql_upper)
+        )
+        if not has_partner_smb_filter:
+            errors.append(
+                "RULE VIOLATION — MISSING MANDATORY BASE FILTER B:\n"
+                "  Every deals query must exclude Partner-Led SMB deals.\n"
+                "  Required pattern:\n"
+                "    CASE WHEN deal_type IS NULL THEN 'Not Assigned'\n"
+                "    ELSE deal_type END NOT IN ('Partner-Led SMB')\n"
+                "  Reason: Partner-Led SMB deals must be excluded from all pipeline metrics.\n"
+                "  Fix: Add this CASE WHEN expression to your WHERE clause."
+            )
+
+        # Filter C: gs_deal_ids_hs allowlist
+        if 'GS_DEAL_IDS_HS' not in sql_upper:
+            errors.append(
+                "RULE VIOLATION — MISSING MANDATORY BASE FILTER C:\n"
+                "  Every deals query must validate against the deal ID allowlist.\n"
+                "  Required pattern:\n"
+                "    toInt64(deal_id) IN (\n"
+                "      SELECT DISTINCT toInt64(deal_id_hs)\n"
+                "      FROM kore_ai_hubspot.gs_deal_ids_hs\n"
+                "    )\n"
+                "  Reason: Only deal IDs in gs_deal_ids_hs are valid for reporting.\n"
+                "  Fix: Add this subquery filter to your WHERE clause."
+            )
+
+    # =========================================================================
+    # RULE 3: countDistinct() not count() for deal-level aggregations
+    # Source: Section 3 — "always countDistinct(), never count()"
+    #         Section 8 Query Rules — "countDistinct(deal_id) for unique deal counts"
+    # =========================================================================
+    is_deals_or_contacts_query = (
+        'HS_ANALYTICS.DEALS'    in sql_upper or
+        'HS_ANALYTICS.CONTACTS' in sql_upper or
+        'DEAL_ID'               in sql_upper or
+        'CONTACT_ID'            in sql_upper
+    )
+    if is_deals_or_contacts_query:
+        # Match COUNT( NOT followed by DISTINCT, 1, or *
+        bad_count_match = re.search(
+            r'\bCOUNT\s*\(\s*(?!DISTINCT\b)(?!1\b)(?!\*\b)([A-Z_]+)',
+            sql_upper
+        )
+        if bad_count_match:
+            col_name = bad_count_match.group(1).lower()
+            errors.append(
+                f"RULE VIOLATION — WRONG AGGREGATION FUNCTION:\n"
+                f"  Found: COUNT({col_name})\n"
+                f"  Required: countDistinct({col_name})\n"
+                f"  Reason: hs_analytics tables without FINAL return duplicate rows.\n"
+                f"  count() inflates results — same deal counted multiple times.\n"
+                f"  Rule: ALWAYS use countDistinct() for deal_id and contact_id.\n"
+                f"  Fix: Replace COUNT({col_name}) with countDistinct({col_name})."
+            )
+
+    # =========================================================================
+    # RULE 4: MQL queries MUST have ALL 3 mandatory MQL filters
+    # Source: Section 6 — "MANDATORY MQL FILTERS"
+    #         "Missing any one produces inflated counts"
+    # =========================================================================
+    is_mql_query = (
+        'HS_ANALYTICS.CONTACTS' in sql_upper and (
+            'MARKETINGQUALIFIEDLEAD' in sql_upper or
+            'LIFECYCLE_STAGE'        in sql_upper or
+            'DATE_ENTERED_MARKETING' in sql_upper or
+            'MQL'                    in sql_upper
+        )
+    )
+    if is_mql_query:
+        mql_missing = []
+
+        # MQL Filter 1: lifecycle_stage + date_entered IS NOT NULL
+        if 'MARKETINGQUALIFIEDLEAD' not in sql_upper:
+            mql_missing.append(
+                "lifecycle_stage = 'marketingqualifiedlead'\n"
+                "     AND date_entered_marketing_qualified_lead_lifecycle_stage_pipeline"
+                " IS NOT NULL"
+            )
+
+        # MQL Filter 2: company_priority P1-P7
+        if 'COMPANY_PRIORITY' not in sql_upper:
+            mql_missing.append(
+                "company_priority IN ('P1','P2','P3','P4','P5','P6','P7')\n"
+                "     [excludes contacts with no company priority — unqualified accounts]"
+            )
+
+        # MQL Filter 3: exclude Bad Data
+        if 'BAD DATA' not in sql_upper and 'BAD_DATA' not in sql_upper:
+            mql_missing.append(
+                "lead_status != 'Bad Data'\n"
+                "     [excludes records flagged as dirty/invalid by ops team]"
+            )
+
+        if mql_missing:
+            errors.append(
+                "RULE VIOLATION — MISSING MANDATORY MQL FILTERS:\n"
+                "  MQL queries on hs_analytics.contacts require ALL THREE filters.\n"
+                "  You are missing:\n" +
+                "\n".join(f"  {i+1}. {f}" for i, f in enumerate(mql_missing)) +
+                "\n  Reason: Missing any one filter produces inflated MQL counts.\n"
+                "  Fix: Add ALL missing filters before running this query."
+            )
+
+    # =========================================================================
+    # RULE 5: Target table columns MUST be cast with toFloat64OrZero()
+    # Source: Section 4 — "NULLABLE STRING CASTING — MANDATORY"
+    #         Section 5 Rule 2 — "CAST ALL NUMERIC COLUMNS"
+    # =========================================================================
+    TARGET_TABLES = [
+        'GS_PIPELINE_QUOTAS_V1',
+        'GS_PARTNER_TARGETS_REGION_WISE',
+        'GS_PARTNER_TARGETS_PSD',
+        'GS_CLOSED_WON_QUOTAS',
+        'GS_MARKETING_TARGETS',
+    ]
+    is_target_query = any(t in sql_upper for t in TARGET_TABLES)
+    if is_target_query:
+        # Detect SUM/AVG on target/quota/amount columns without toFloat64OrZero cast
+        raw_agg_match = re.search(
+            r'\b(SUM|AVG)\s*\(\s*(?!TOFLOAT64ORZERO\b)([A-Z0-9_]*'
+            r'(?:TARGET|QUOTA|AMOUNT|MQL)[A-Z0-9_]*)',
+            sql_upper
+        )
+        if raw_agg_match:
+            agg_fn  = raw_agg_match.group(1)
+            col_raw = raw_agg_match.group(2).lower()
+            errors.append(
+                f"RULE VIOLATION — MISSING NULLABLE STRING CAST:\n"
+                f"  Found: {agg_fn}({col_raw})\n"
+                f"  Required: {agg_fn}(toFloat64OrZero({col_raw}))\n"
+                f"  Reason: ALL target/quota table columns are Nullable(String) in ClickHouse.\n"
+                f"  Raw SUM/AVG on Nullable(String) throws a type error or returns NULL.\n"
+                f"  Rule: ALWAYS wrap target columns: toFloat64OrZero(column_name)\n"
+                f"  Fix: Replace {agg_fn}({col_raw}) with "
+                f"{agg_fn}(toFloat64OrZero({col_raw}))."
+            )
+
+    # =========================================================================
+    # RULE 6: Target queries must NOT fan-out join deals to target tables
+    # Source: Section 5 Rule 3 — "NO FAN-OUT JOINS"
+    #         "One quota row × N matching deals = quota multiplied N times"
+    # =========================================================================
+    if is_target_query and 'HS_ANALYTICS.DEALS' in sql_upper:
+        # Fan-out risk: direct JOIN between deals and target table
+        # Safe pattern uses CTEs (WITH keyword separates them)
+        has_cte = sql_upper.strip().startswith('WITH')
+        has_direct_join = bool(re.search(
+            r'JOIN\s+(?:KORE_AI_HUBSPOT\.)?(?:' +
+            '|'.join(TARGET_TABLES) +
+            r')',
+            sql_upper
+        ))
+        if has_direct_join and not has_cte:
+            errors.append(
+                "RULE VIOLATION — FAN-OUT JOIN DETECTED:\n"
+                "  You are directly JOINing hs_analytics.deals to a target table.\n"
+                "  This causes quota multiplication: 1 quota row × N deals = wrong totals.\n"
+                "  Example of the bug: if a region has 50 deals and 1 quota row,\n"
+                "  SUM(quota) returns quota_value × 50, not quota_value × 1.\n"
+                "  Required pattern: Use independent CTEs — compute actuals and\n"
+                "  targets separately, then JOIN the aggregated results:\n"
+                "    WITH actual AS (SELECT region, SUM(amount) FROM deals GROUP BY region),\n"
+                "         target AS (SELECT region, SUM(toFloat64OrZero(amount_target_20))\n"
+                "                    FROM target_table GROUP BY region)\n"
+                "    SELECT * FROM actual LEFT JOIN target USING (region)\n"
+                "  Fix: Rewrite using the CTE pattern above."
+            )
+
+    # =========================================================================
+    # RULE 7: Target period grain must match — use quarter filter, not /4
+    # Source: Section 5 Rule 6 — "NEVER divide annual target by 4"
+    #         "ALWAYS filter the target table by the specific quarter"
+    # =========================================================================
+    if is_target_query:
+        # Detect division by 4 applied to target columns (annual ÷ 4 anti-pattern)
+        divide_by_4 = re.search(
+            r'(?:TARGET|QUOTA)[A-Z0-9_]*\s*/\s*4\b',
+            sql_upper
+        )
+        if divide_by_4:
+            errors.append(
+                "RULE VIOLATION — INCORRECT QUARTERLY TARGET CALCULATION:\n"
+                "  Found: dividing a target column by 4 to get quarterly target.\n"
+                "  This is WRONG — target tables already store quarterly values.\n"
+                "  Dividing by 4 produces targets that are 4x too small.\n"
+                "  Required pattern: Filter target table directly by quarter:\n"
+                "    WHERE fy = 'FY27' AND quarter = 'Q1'\n"
+                "  The quarterly total is the direct SUM of those filtered rows.\n"
+                "  Fix: Remove the /4 division. Add WHERE quarter = 'Q1' instead."
+            )
+
+        # Warn if no quarter/month/fy filter on target table
+        has_period_filter = (
+            re.search(r"QUARTER\s*=\s*'Q\d'", sql_upper) or
+            re.search(r"FY\s*=\s*'FY\d+'"  , sql_upper) or
+            re.search(r"MONTH\s*=\s*'",      sql_upper)
+        )
+        if not has_period_filter:
+            errors.append(
+                "RULE VIOLATION — MISSING PERIOD FILTER ON TARGET TABLE:\n"
+                "  Target table query has no fy/quarter/month filter.\n"
+                "  Without a period filter, SUM aggregates ALL years and quarters,\n"
+                "  producing a target that is many times larger than intended.\n"
+                "  Required: Add at minimum fy = 'FY27' AND quarter = 'Q1'\n"
+                "  (or the specific period the user asked about).\n"
+                "  Fix: Add WHERE fy = 'FY27' AND quarter = '<quarter>' to the\n"
+                "  target table CTE or subquery."
+            )
+
+    # =========================================================================
+    # RULE 8: nullIf() required in division to prevent divide-by-zero
+    # Source: Section 5 Rule 5 — "Use nullIf(target, 0) in division"
+    #         Section 5 Rule 7 — "ATTAINMENT = round(actual / nullIf(target,0)*100,1)"
+    # =========================================================================
+    if is_target_query:
+        # Detect division where denominator is a target/quota column without nullIf
+        raw_division = re.search(
+            r'/\s*(?!NULLIF\b)(?!0\b)([A-Z_]*(?:TARGET|QUOTA|AMOUNT)[A-Z_0-9]*)',
+            sql_upper
+        )
+        if raw_division:
+            col = raw_division.group(1).lower()
+            errors.append(
+                f"RULE VIOLATION — MISSING nullIf() IN DIVISION:\n"
+                f"  Found: / {col} (raw division by target/quota column)\n"
+                f"  Required: / nullIf({col}, 0)\n"
+                f"  Reason: If target is 0 or NULL, division throws an error or\n"
+                f"  returns infinity/NULL, breaking attainment calculations.\n"
+                f"  Rule: ATTAINMENT = round(actual / nullIf(target, 0) * 100, 1)\n"
+                f"  Fix: Replace '/ {col}' with '/ nullIf({col}, 0)'."
+            )
+
+    # =========================================================================
+    # RULE 9: Stage cohort queries — MUST exclude lower stages + handle
+    #         Closed Won correctly
+    # Source: Section 8 — "REGISTERED DEALS (REG DEALS) DEFINITION"
+    #         Missing rule (now added):
+    #         - became_10_deal_date cohort must EXCLUDE became_1_deal_date
+    #           and became_5_deal_date records (not just filter on became_10)
+    #         - Closed Won cohort must INCLUDE '90% - Deal Desk Review' stage
+    #           because deals pass through 90% before closing
+    # =========================================================================
+
+    # Detect stage cohort queries (queries filtering on became_XX_deal_date columns)
+    COHORT_COLUMNS = {
+        'BECAME_5_DEAL_DATE' : 5,
+        'BECAME_10_DEAL_DATE': 10,
+        'BECAME_20_DEAL_DATE': 20,
+        'BECAME_30_DEAL_DATE': 30,
+        'BECAME_40_DEAL_DATE': 40,
+        'BECAME_60_DEAL_DATE': 60,
+        'BECAME_75_DEAL_DATE': 75,
+    }
+
+    referenced_cohorts = [
+        (col, stage) for col, stage in COHORT_COLUMNS.items()
+        if col in sql_upper
+    ]
+
+    if referenced_cohorts:
+        for col, stage in referenced_cohorts:
+
+            # ── RULE 9a: Lower-stage exclusion ────────────────────────────
+            # When querying became_10_deal_date cohort, records that only
+            # reached 1% or 5% (but never progressed further) must be excluded.
+            # Same logic applies upward: became_20 should exclude those that
+            # never made it past 10%, etc.
+            # The correct pattern: filter the cohort date IS NOT NULL
+            # AND the previous lower stage date IS NULL (pure cohort) OR
+            # use the date range on the specific cohort column only.
+            # We check: if querying became_10+, make sure became_1/became_5
+            # are not being INCLUDED without exclusion logic.
+
+            if stage >= 10:
+                # Check if query is pulling in lower stage records without exclusion
+                # Heuristic: if became_5_deal_date appears in SELECT or JOIN
+                # without IS NULL exclusion, flag it
+                has_lower_stage = 'BECAME_5_DEAL_DATE' in sql_upper
+                has_exclusion   = bool(re.search(
+                    r'BECAME_5_DEAL_DATE\s+IS\s+NULL',
+                    sql_upper
+                ))
+                # Only flag if lower stage column is referenced in a way
+                # that suggests inclusion, not exclusion
+                if has_lower_stage and not has_exclusion:
+                    # Check it's in SELECT (not just WHERE IS NULL)
+                    in_select = bool(re.search(
+                        r'SELECT.*BECAME_5_DEAL_DATE',
+                        sql_upper,
+                        re.DOTALL
+                    ))
+                    if in_select:
+                        errors.append(
+                            f"RULE VIOLATION — COHORT CONTAMINATION (Stage {stage}%):\n"
+                            f"  Query references became_5_deal_date in SELECT without\n"
+                            f"  excluding records that did not progress beyond 5%.\n"
+                            f"  When building a {stage}% cohort, you must EXCLUDE deals\n"
+                            f"  that only reached 1% or 5% and never progressed further.\n"
+                            f"  Required exclusion pattern:\n"
+                            f"    WHERE became_{stage}_deal_date IS NOT NULL\n"
+                            f"    -- To get PURE {stage}% cohort, also exclude lower stages:\n"
+                            f"    AND became_5_deal_date IS NULL  -- never reached 5% before {stage}%\n"
+                            f"  OR use the cohort date column filter exclusively:\n"
+                            f"    WHERE became_{stage}_deal_date BETWEEN '<start>' AND '<end>'\n"
+                            f"  Fix: Add exclusion filters for lower stage date columns."
+                        )
+
+        # ── RULE 9b: Closed Won cohort must include 90% Deal Desk Review ──
+        # Source: Missing rule now added —
+        # Deals transition: ... → 75% → 90% Deal Desk Review → Closed Won
+        # A Closed Won count that excludes '90% - Deal Desk Review' is incomplete
+        # because some deals sit in 90% at query time but are effectively won.
+        # When querying Closed Won stage, ALWAYS include 90% Deal Desk Review.
+
+        is_closed_won_query = (
+            "CLOSED WON"    in sql_upper or
+            "CLOSED_WON"    in sql_upper or
+            "'CLOSED WON'"  in sql_upper
+        )
+        if is_closed_won_query:
+            has_90_stage = (
+                '90%'                  in sql_upper or
+                'DEAL DESK'            in sql_upper or
+                'DEAL_DESK'            in sql_upper or
+                '90% - DEAL DESK'      in sql_upper
+            )
+            if not has_90_stage:
+                errors.append(
+                    "RULE VIOLATION — INCOMPLETE CLOSED WON DEFINITION:\n"
+                    "  Query filters for 'Closed Won' stage but EXCLUDES\n"
+                    "  '90% - Deal Desk Review' stage.\n"
+                    "  Reason: Deals transition through 90% Deal Desk Review\n"
+                    "  before reaching Closed Won. Excluding 90% understates\n"
+                    "  the won pipeline because deals in Deal Desk Review are\n"
+                    "  effectively won but not yet stamped as Closed Won.\n"
+                    "  Required: Include both stages in your filter:\n"
+                    "    deal_stage IN ('Closed Won', '90% - Deal Desk Review')\n"
+                    "  Fix: Add '90% - Deal Desk Review' to your deal_stage filter."
+                )
+
+    # =========================================================================
+    # RULE 10: Association table queries must use DISTINCT
+    # Source: Section 3 — "Association tables: DISTINCT in subquery"
+    # =========================================================================
+    if 'GS_DEALCONTACTASSOCIATION' in sql_upper:
+        # Check if DISTINCT is used when selecting from association table
+        assoc_block = re.search(
+            r'FROM\s+(?:KORE_AI_HUBSPOT\.)?GS_DEALCONTACTASSOCIATION(.*?)(?:WHERE|GROUP|ORDER|LIMIT|$)',
+            sql_upper,
+            re.DOTALL
+        )
+        if assoc_block and 'DISTINCT' not in sql_upper:
+            errors.append(
+                "RULE VIOLATION — MISSING DISTINCT ON ASSOCIATION TABLE:\n"
+                "  Queries on gs_DealContactAssociation must use DISTINCT\n"
+                "  to avoid duplicate contact-deal pairs.\n"
+                "  Required pattern:\n"
+                "    SELECT DISTINCT contact_id, deal_id\n"
+                "    FROM kore_ai_hubspot.gs_DealContactAssociation\n"
+                "  Fix: Add DISTINCT to your SELECT from gs_DealContactAssociation."
+            )
+
+    # =========================================================================
+    # RULE 11: No LIMIT on list queries unless user asked for "top N"
+    # Source: Section 8 Query Rules — "For LIST queries: NO LIMIT unless
+    #         user says 'top N' or 'first N'"
+    # This is a WARNING not a block — log it but don't fail the query
+    # =========================================================================
+    if re.search(r'\bLIMIT\s+\d+', sql_upper):
+        limit_match = re.search(r'\bLIMIT\s+(\d+)', sql_upper)
+        limit_val   = int(limit_match.group(1)) if limit_match else 0
+        # Only warn for small limits that would hide data
+        if limit_val > 0 and limit_val < 500:
+            print(
+                f"   ⚠️  [GUARD RAIL WARNING] LIMIT {limit_val} detected. "
+                f"If this is a list query (not top-N), remove the LIMIT so all rows are returned. "
+                f"System already caps display at 100 rows safely."
+            )
+            # NOTE: This is a WARNING only — we do NOT block the query.
+            # Claude sometimes legitimately uses LIMIT for exploratory queries.
+            # Blocking here would cause false positives.
+    
+     # =========================================================================
+    # RULE 12: Date columns MUST be normalized before use
+    # Required pattern: DATE(LEFT(coalesce(col,'1900-01-01'),10))
+    # Reason: Date columns may be Nullable(String)/DateTime with inconsistent
+    #         formats (full timestamps, NULLs). Wrapping guarantees a clean,
+    #         comparable Date value with a safe default for NULLs.
+    # =========================================================================
+    DATE_FUNC_BLOCKLIST = {
+        'DATE', 'DATE_TRUNC', 'DATEDIFF', 'DATE_ADD', 'DATE_SUB',
+        'DATEADD', 'DATESUB', 'TODATE', 'TODATE32', 'TODATETIME',
+        'TODATETIME64', 'TODAY', 'TODAYS', 'FORMATDATETIME',
+        'PARSEDATETIME', 'PARSEDATETIMEBESTEFFORT', 'TOSTARTOFMONTH',
+        'TOSTARTOFQUARTER', 'TOSTARTOFYEAR', 'TOSTARTOFWEEK',
+        'TOSTARTOFDAY', 'TOYYYYMM', 'TOYYYYMMDD', 'CURRENT_DATE',
+        'CURDATE', 'TODATEORZERO', 'TODATEORNULL', 'TODATETIMEORZERO',
+        'TODATETIMEORNULL',
+    }
+ 
+    wrapped_pattern = re.compile(
+        r"DATE\s*\(\s*LEFT\s*\(\s*COALESCE\s*\(\s*([A-Z][A-Z0-9_.]*DATE[A-Z0-9_]*)"
+        r"\s*,\s*'1900-01-01'\s*\)\s*,\s*10\s*\)\s*\)"
+    )
+    sql_no_wrapped = wrapped_pattern.sub(' ', sql_upper)
+ 
+    date_col_candidates = set(re.findall(
+        r'\b([A-Z][A-Z0-9_]*DATE[A-Z0-9_]*)\b', sql_upper
+    )) - DATE_FUNC_BLOCKLIST
+ 
+    unwrapped_date_cols = []
+    for col in sorted(date_col_candidates):
+        if re.search(rf'\b{re.escape(col)}\b', sql_no_wrapped):
+            unwrapped_date_cols.append(col)
+ 
+    if unwrapped_date_cols:
+        examples = "\n".join(
+            f"    {c.lower()}  →  DATE(LEFT(coalesce({c.lower()},'1900-01-01'),10))"
+            for c in unwrapped_date_cols
+        )
+        errors.append(
+            "RULE VIOLATION — DATE COLUMN NOT NORMALIZED:\n"
+            "  The following date column(s) are referenced without the required\n"
+            "  normalization wrapper:\n"
+            f"{examples}\n"
+            "  Required pattern for ANY date field before comparing, filtering,\n"
+            "  grouping, or selecting it:\n"
+            "    DATE(LEFT(coalesce(<column>,'1900-01-01'),10))\n"
+            "  Reason: Date columns may contain NULLs or full timestamp strings\n"
+            "  in inconsistent formats. coalesce(...,'1900-01-01') supplies a safe\n"
+            "  default for NULLs, LEFT(...,10) trims to the YYYY-MM-DD portion,\n"
+            "  and DATE(...) casts it to a proper Date type for reliable\n"
+            "  comparisons, joins, and date arithmetic.\n"
+            "  Fix: Replace every raw reference to the column(s) above with\n"
+            "  DATE(LEFT(coalesce(<column>,'1900-01-01'),10)) before using it."
+        )
+        
+    # =========================================================================
+    # BUILD FINAL ERROR MESSAGE
+    # =========================================================================
+    if errors:
+        error_count = len(errors)
+        msg = (
+            f"⛔ SQL GUARD RAIL BLOCKED THIS QUERY\n"
+            f"   {error_count} rule violation{'s' if error_count > 1 else ''} found.\n"
+            f"   Fix ALL violations below, then call query_clickhouse again.\n\n"
+            f"{'='*60}\n\n"
+        )
+        for i, e in enumerate(errors, 1):
+            msg += f"VIOLATION {i}:\n{e}\n\n{'─'*50}\n\n"
+
+        msg += (
+            "ACTION REQUIRED:\n"
+            "Rewrite the SQL addressing every violation above.\n"
+            "Call query_clickhouse again with the corrected query.\n"
+            "Do NOT tell the user the query was blocked — "
+            "just fix and retry silently."
+        )
+        return False, msg
+
+    return True, ""
+
+# =============================================================================
+# ClickHouse query runner
 # =============================================================================
 def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
-    """
-    Execute SQL against ClickHouse.
-    - Stores the FULL result set in _SESSION_STORE[session_id] (no row cap).
-    - Returns a chat-display string capped at CHAT_DISPLAY_LIMIT rows.
-    The export layer reads from the session store and gets all rows.
-    """
     base_url = _base_url()
     token    = _token()
 
@@ -806,6 +1302,15 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
     for kw in FORBIDDEN_KEYWORDS:
         if re.search(rf'\b{kw}\b', stripped):
             return f"ERROR: Forbidden keyword: {kw}"
+    
+    # ── SQL GUARD RAIL ──────────────────────────────────────────────────────
+    is_valid, guard_error = _validate_sql_guardrail(sql)
+    if not is_valid:
+        print(f"   🚫 [GUARD RAIL BLOCKED]\n{guard_error[:300]}")
+        return guard_error  # Claude reads this → self-corrects → retries
+    # ───────────────────────────────────────────────────────────────────────
+
+    print(f"✅ [GUARD RAIL PASSED] SQL → {sql[:200]}")
 
     print(f"🔍 SQL (session={session_id}) → {sql[:200]}")
 
@@ -830,7 +1335,6 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
 
         payload = resp.json()
 
-        # Normalise to list of rows
         if isinstance(payload, list):
             rows = payload
         elif isinstance(payload, dict):
@@ -844,12 +1348,10 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
         if not rows:
             return "Query returned 0 rows."
 
-        # Normalise rows to list-of-dicts
         if isinstance(rows[0], dict):
             columns = list(rows[0].keys())
             norm_rows = rows
         else:
-            # List-of-lists — use index keys
             if api_columns and len(api_columns) == len(rows[0]):
                 columns = [c["name"] if isinstance(c, dict) else c for c in api_columns]
             else:
@@ -858,18 +1360,16 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
 
         total_rows = len(norm_rows)
 
-        # ── Store FULL result in session (no row cap) ──────────────────
         if session_id:
             _store_result(session_id, QueryResult(
                 sql          = sql,
                 columns      = columns,
-                rows         = norm_rows,   # ALL rows
+                rows         = norm_rows,
                 total_rows   = total_rows,
                 captured_at  = datetime.utcnow().isoformat() + "Z",
                 filters_applied = _extract_filters_from_sql(sql),
             ))
 
-        # ── Build chat display (capped at 100 rows for readability) ───
         CHAT_DISPLAY_LIMIT = 100
         header = " | ".join(columns)
         lines  = [header, "-" * min(len(header), 140)]
@@ -897,7 +1397,6 @@ def run_clickhouse_query(sql: str, session_id: Optional[str] = None) -> str:
 
 
 def _extract_filters_from_sql(sql: str) -> str:
-    """Extract a human-readable summary of WHERE filters from SQL."""
     sql_upper = sql.upper()
     filters = []
     if "PIPELINE = 'DEFAULT'" in sql_upper:
@@ -916,6 +1415,13 @@ def _extract_filters_from_sql(sql: str) -> str:
         m = re.search(r"region\s*=\s*'([^']+)'", sql, re.IGNORECASE)
         if m:
             filters.append(f"Region: {m.group(1)}")
+    # FIX 2: detect MQL filters
+    if "COMPANY_PRIORITY" in sql_upper:
+        filters.append("Company Priority: P1–P7")
+    if "LEAD_STATUS" in sql_upper and "BAD DATA" in sql_upper:
+        filters.append("Lead Status: excludes 'Bad Data'")
+    if "LIFECYCLE_STAGE" in sql_upper and "MARKETINGQUALIFIEDLEAD" in sql_upper:
+        filters.append("Lifecycle: MQL only")
     return "; ".join(filters) if filters else "Standard base filters applied"
 
 
@@ -925,8 +1431,12 @@ def _extract_filters_from_sql(sql: str) -> str:
 @app.on_event("startup")
 async def on_startup():
     global _SYSTEM_PROMPT
-    discover_schema()
-    _SYSTEM_PROMPT = _build_system_prompt()
+    try:
+        discover_schema()
+        _SYSTEM_PROMPT = _build_system_prompt()
+    except Exception as e:
+        print(f"⚠️  Schema discovery failed: {e}")
+    _cleanup_sessions()
     print("🚀 DIUD v4 started — session-store export enabled.")
 
 
@@ -979,13 +1489,14 @@ class ExportPreviewRequest(BaseModel):
 
 class ExportDownloadRequest(BaseModel):
     format: Literal["pdf", "pptx", "csv"]
-    content: Optional[str] = None    # markdown content (pdf/pptx)
+    content: Optional[str] = None
     title: str = "Pipeline Intelligence Report"
     session_id: Optional[str] = None
 
 
 # =============================================================================
-# Claude tool loop — passes session_id so query runner can store results
+# Claude tool loop
+# FIX 1: max_tokens raised to CHAT_MAX_TOKENS (4096) for chat
 # =============================================================================
 def _extract_text(content_blocks) -> str:
     return "\n".join(
@@ -993,11 +1504,11 @@ def _extract_text(content_blocks) -> str:
     ).strip()
 
 
-def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[str] = None, model: str = "sonnet") -> str:
-    
+def _call_claude(messages: list, max_tokens: int = CHAT_MAX_TOKENS,
+                 session_id: Optional[str] = None, model: str = "sonnet") -> str:
+
     selected_model = ALLOWED_MODELS.get(model, ALLOWED_MODELS["sonnet"])
 
-    # Strip tool_use/tool_result blocks from history (can't replay them)
     safe_messages = []
     for m in messages:
         content = m.get("content", "")
@@ -1014,7 +1525,7 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
             safe_messages.append({"role": m["role"], "content": content})
 
     response = _ai_client.messages.create(
-        model=_CLAUDE_MODEL,
+        model=selected_model,
         system=_SYSTEM_PROMPT,
         messages=safe_messages,
         tools=[_QUERY_TOOL],
@@ -1052,7 +1563,7 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
 
         safe_messages = safe_messages + [
             {"role": "assistant", "content": response.content},
-            {"role": "user", "content": tool_result_blocks},
+            {"role": "user",      "content": tool_result_blocks},
         ]
 
         is_last_round = (round_num == MAX_ROUNDS - 1)
@@ -1060,8 +1571,6 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
             model=selected_model,
             system=_SYSTEM_PROMPT,
             messages=safe_messages,
-            # On the final round, withhold tools so Claude is forced to
-            # summarize in text instead of issuing yet another tool call.
             tools=[] if is_last_round else [_QUERY_TOOL],
             temperature=0,
             max_tokens=max_tokens,
@@ -1070,9 +1579,6 @@ def _call_claude(messages: list, max_tokens: int = 2048, session_id: Optional[st
     reply = _extract_text(response.content)
 
     if not reply:
-        # Still empty even after forcing a text-only round. This means the
-        # model returned no text at all (rare) — surface the real cause
-        # instead of a generic "connectivity" message.
         if last_error:
             reply = (
                 "⚠️ I couldn't complete this query. The last database error was:\n\n"
@@ -1147,12 +1653,13 @@ def chat(payload: ChatRequest):
     print(f"💬 [chat] session={payload.session_id} msg={payload.message[:80]}")
 
     try:
-        reply = _call_claude(messages, session_id=payload.session_id, model=payload.model)
+        # FIX 1: pass CHAT_MAX_TOKENS explicitly
+        reply = _call_claude(messages, max_tokens=CHAT_MAX_TOKENS,
+                             session_id=payload.session_id, model=payload.model)
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Claude error: {exc}")
 
-    # Surface whether there is a stored dataset for this session
     has_dataset = payload.session_id is not None and payload.session_id in _SESSION_STORE
     stored = _SESSION_STORE.get(payload.session_id) if payload.session_id else None
 
@@ -1165,49 +1672,20 @@ def chat(payload: ChatRequest):
 
 
 # =============================================================================
-# Retry — re-runs the last user message with fresh LLM call
+# Retry
 # =============================================================================
-
 class RetryRequest(BaseModel):
-    """
-    Re-run the most recent user message with a fresh LLM call.
-
-    history    : full conversation UP TO AND INCLUDING the last user message.
-                 The last item must be role='user'. Any prior assistant reply
-                 for that turn is intentionally excluded so the model generates
-                 a new response.
-    session_id : existing session — query results from previous turns are
-                 preserved in the session store so exports still work.
-    """
     history:    List[ChatMessage] = []
     session_id: Optional[str] = None
-    model:      str = "sonnet" 
+    model:      str = "sonnet"
 
 
 @app.post("/chat/retry")
 def chat_retry(payload: RetryRequest):
-    """
-    Regenerate the last assistant response without adding a new user message.
-
-    Steps:
-    1. Validate that the last history entry is a user message.
-    2. Remove the last assistant message if present (prevents duplicate in history).
-    3. Call Claude fresh with the same conversation context.
-    4. Return the new reply with the same response shape as /chat.
-
-    This preserves:
-    - Full conversation context (all prior turns)
-    - Session store (dataset / query results)
-    - Dashboard context embedded in history
-    """
     if not payload.history:
         raise HTTPException(status_code=400, detail="history must not be empty for retry.")
 
-    # Walk backwards: find the last user message and strip any trailing assistant
-    # message so we don't send the old answer as context for the regeneration.
     clean_history = list(payload.history)
-
-    # Remove trailing assistant message(s) — they are the stale response being retried
     while clean_history and clean_history[-1].role == "assistant":
         clean_history.pop()
 
@@ -1218,7 +1696,7 @@ def chat_retry(payload: RetryRequest):
         )
 
     last_user_msg = clean_history[-1].content
-    prior_history = clean_history[:-1]   # everything before the last user message
+    prior_history = clean_history[:-1]
 
     print(f"🔄 [retry] session={payload.session_id} retrying: {last_user_msg[:80]}")
 
@@ -1226,7 +1704,7 @@ def chat_retry(payload: RetryRequest):
     messages.append({"role": "user", "content": last_user_msg})
 
     try:
-        reply = _call_claude(messages, session_id=payload.session_id)
+        reply = _call_claude(messages, max_tokens=CHAT_MAX_TOKENS, session_id=payload.session_id)
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Claude error on retry: {exc}")
@@ -1244,7 +1722,7 @@ def chat_retry(payload: RetryRequest):
 
 
 # =============================================================================
-# Session info — lets the frontend know what's stored
+# Session info
 # =============================================================================
 @app.get("/session/{session_id}/dataset-info")
 def session_dataset_info(session_id: str):
@@ -1262,7 +1740,8 @@ def session_dataset_info(session_id: str):
 
 
 # =============================================================================
-# Export preview — generates AI narrative + injects full table
+# Export preview
+# FIX 1: uses EXPORT_MAX_TOKENS (6144) for long reports
 # =============================================================================
 @app.post("/export/preview")
 async def export_preview(req: ExportPreviewRequest):
@@ -1271,7 +1750,6 @@ async def export_preview(req: ExportPreviewRequest):
 
     print(f"📄 [export/preview] session={req.session_id} type={req.export_type}")
 
-    # Fetch stored dataset (may be None for summary-only exports)
     stored = _get_result(req.session_id) if req.session_id else None
 
     try:
@@ -1298,13 +1776,12 @@ async def export_preview(req: ExportPreviewRequest):
 
 
 # =============================================================================
-# Export download — PDF, PPTX, or CSV, all from session store
+# Export download
 # =============================================================================
 @app.post("/export/download")
 async def export_download(req: ExportDownloadRequest):
     print(f"⬇️  [export/download] format={req.format} session={req.session_id}")
 
-    # ── CSV: purely from session store, no AI involvement ────────────────
     if req.format == "csv":
         stored = _get_result(req.session_id) if req.session_id else None
         if not stored:
@@ -1325,7 +1802,6 @@ async def export_download(req: ExportDownloadRequest):
             },
         )
 
-    # ── PDF / PPTX: from pre-generated content (passed from preview step) ─
     if not req.content:
         raise HTTPException(status_code=400, detail="content is required for PDF/PPTX export.")
 
@@ -1366,12 +1842,10 @@ def _strip_md(t: str) -> str:
 
 
 # =============================================================================
-# CSV builder — generates UTF-8 CSV from session store (all rows, no cap)
+# CSV builder
 # =============================================================================
 def _build_csv(stored: QueryResult) -> bytes:
     buf = io.StringIO()
-
-    # Metadata header
     buf.write(f"# Title: {stored.sql[:80]}\n")
     buf.write(f"# Generated: {date.today().isoformat()}\n")
     buf.write(f"# Total Records: {stored.total_rows}\n")
@@ -1386,7 +1860,7 @@ def _build_csv(stored: QueryResult) -> bytes:
         lineterminator = "\n",
     )
     writer.writeheader()
-    for row in stored.rows:   # ALL rows from session store
+    for row in stored.rows:
         writer.writerow(row)
 
     return buf.getvalue().encode("utf-8")
@@ -1394,6 +1868,7 @@ def _build_csv(stored: QueryResult) -> bytes:
 
 # =============================================================================
 # Export content generation
+# FIX 1: EXPORT_MAX_TOKENS used here for long document generation
 # =============================================================================
 def _generate_export_content(
     conversation:    List[ChatMessage],
@@ -1402,13 +1877,8 @@ def _generate_export_content(
     detail_level:    str = "detailed",
     stored_dataset:  Optional[QueryResult] = None,
 ) -> str:
-    """
-    Claude writes the narrative (summary, insights, recommendations).
-    The full deal table (if any) is injected directly from the session store —
-    not reconstructed from chat text, not subject to any token/row limits.
-    """
+    selected_model = ALLOWED_MODELS["sonnet"]
 
-    # Clean conversation: strip any old embedded JSON blocks from previous iterations
     conv_text = "\n\n".join(
         f"{'USER' if m.role == 'user' else 'DIUD AGENT'}: {m.content}"
         for m in conversation
@@ -1435,57 +1905,36 @@ def _generate_export_content(
             f"The complete table will be injected at [DEAL_TABLE_PLACEHOLDER]."
         )
 
-    # Extract the last user instruction about what they want in the export
-    last_user_instructions = ""
-    for m in reversed(conversation):
-        if m.role == "user":
-            last_user_instructions = m.content
-            break
-
     prompt = f"""You are preparing a professional {export_type.upper()} export document.
 
-CONVERSATION (full context):
+CONVERSATION:
 {conv_text}
 {dataset_hint}
 
 TASK: Create "{title}"
 
-CRITICAL INSTRUCTION — READ CAREFULLY:
-The user's most recent request was: "{last_user_instructions}"
-
-You must honour EXACTLY what the user asked for. Do NOT impose a generic template.
-- If the user said "just the output from my question" → reproduce only the data/analysis from the conversation, no boilerplate sections
-- If the user said "win rate analysis" → structure the document around win rates only
-- If the user said "executive summary" → write only an executive summary
-- If the user said "show me the deals table" → just include the deal table with minimal narrative
-- If the user gave NO specific instruction → use logical sections based on what was actually discussed
-
-ADAPT the document structure to match what was discussed in the conversation.
-Only include sections that are relevant to the actual conversation content.
-Do NOT add sections like "Recommendations" or "Insights" unless the conversation actually contains those.
-
 {format_hint}
 {detail_hint}
 
-ADDITIONAL RULES:
-- If this is a deal list export, include [DEAL_TABLE_PLACEHOLDER] where the table belongs
-- Bold key numbers; clean professional tone  
+REQUIREMENTS:
+- Executive summary at the start with key numbers
+- Logical sections: summary, key metrics, insights, recommendations
+- If this is a deal list export, include [DEAL_TABLE_PLACEHOLDER] where the full table belongs
+- Bold key numbers; clean professional tone
 - Today: {date.today().strftime('%B %d, %Y')}
-- Mirror the data and language from the conversation — do not fabricate or add context not present
+- Generate the COMPLETE document — do not truncate or stop early
 
-Generate the document now, shaped around what was actually asked:"""
+Generate the document now:"""
 
     response = _ai_client.messages.create(
-        model=_CLAUDE_MODEL,
-        system  = "You are a professional business report writer. Generate clean, well-structured documents.",
+        model   = selected_model,
+        system  = "You are a professional business report writer. Generate clean, well-structured, COMPLETE documents. Never truncate mid-section.",
         messages= [{"role": "user", "content": prompt}],
         temperature = 0,
-        max_tokens  = 4096,
+        max_tokens  = EXPORT_MAX_TOKENS,   # FIX 1: was hardcoded 4096
     )
     ai_text = _extract_text(response.content)
 
-    # ── Inject full deal table from session store ──────────────────────────
-    # Claude is NOT trusted to reproduce the table — we do it ourselves.
     if stored_dataset and stored_dataset.total_rows > 0:
         table_md  = _rows_to_markdown_table(stored_dataset)
         meta_line = (
@@ -1504,7 +1953,6 @@ Generate the document now, shaped around what was actually asked:"""
 
 
 def _rows_to_markdown_table(stored: QueryResult) -> str:
-    """Convert session-store rows to a markdown table (all rows, no cap)."""
     if not stored.rows:
         return "_No data._"
 
@@ -1513,7 +1961,7 @@ def _rows_to_markdown_table(stored: QueryResult) -> str:
     sep    = "| " + " | ".join("---" for _ in cols) + " |"
     lines  = [header, sep]
 
-    for row in stored.rows:   # all rows from session store
+    for row in stored.rows:
         cells = [str(row.get(c, "")).replace("|", "\\|") for c in cols]
         lines.append("| " + " | ".join(cells) + " |")
 
@@ -1587,11 +2035,6 @@ def _parse_sections(text: str):
 
 
 def _build_pdf(title: str, report_text: str) -> bytes:
-    """
-    Build a PDF from markdown content.
-    Markdown tables (| col | col |) are rendered as native ReportLab tables
-    so that deal lists with many columns stay readable.
-    """
     buf     = io.BytesIO()
     styles  = _pdf_styles()
     sections = _parse_sections(report_text)
@@ -1648,13 +2091,11 @@ def _build_pdf(title: str, report_text: str) -> bytes:
             ))
             story.append(Spacer(1, 6))
 
-            # Detect markdown table blocks vs normal lines
             lines = sec_body.split("\n")
             i = 0
             while i < len(lines):
                 line = lines[i].strip()
 
-                # Start of a markdown table
                 if line.startswith("|") and i + 1 < len(lines) and "---" in lines[i + 1]:
                     table_lines = []
                     while i < len(lines) and lines[i].strip().startswith("|"):
@@ -1683,10 +2124,9 @@ def _build_pdf(title: str, report_text: str) -> bytes:
 
 
 def _md_table_to_rl(table_lines: list, styles: dict):
-    """Convert markdown table lines to a ReportLab Table element."""
     data = []
     for idx, line in enumerate(table_lines):
-        if "---" in line:    # separator row — skip
+        if "---" in line:
             continue
         cells = [c.strip().replace("\\|", "|") for c in line.strip("|").split("|")]
         if idx == 0:
@@ -1794,7 +2234,6 @@ def _build_pptx(title: str, slide_text: str) -> bytes:
             if k in t: return c
         return _C_BLUE_P
 
-    # Cover
     cover = prs.slides.add_slide(blank)
     _pptx_bg(cover, _C_NAVY_P)
     _pptx_rect(cover, 0, 3.2, 13.33, 0.06, _C_BLUE_P)
