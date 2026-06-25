@@ -63,7 +63,7 @@ ALLOWED_MODELS = {
 # Chat responses: 4096 → handles long analytical responses without mid-sentence cut
 # Export generation: 6144 → handles full reports with large deal tables
 CHAT_MAX_TOKENS   = 4096
-EXPORT_MAX_TOKENS = 6144
+EXPORT_MAX_TOKENS = 8096
 
 # =============================================================================
 # SERVER-SIDE SESSION STORE
@@ -1748,7 +1748,7 @@ async def export_preview(req: ExportPreviewRequest):
     if not req.conversation:
         raise HTTPException(status_code=400, detail="No conversation to export.")
 
-    print(f"📄 [export/preview] session={req.session_id} type={req.export_type}")
+    print(f"📄 [export/preview] session={req.session_id} type={req.export_type} detail={req.detail_level}")
 
     stored = _get_result(req.session_id) if req.session_id else None
 
@@ -1760,9 +1760,13 @@ async def export_preview(req: ExportPreviewRequest):
             detail_level   = req.detail_level,
             stored_dataset = stored,
         )
+    except ValueError as exc:
+        # Known/expected errors (prompt too large, timeout, etc.)
+        print(f"❌ Export ValueError: {exc}")
+        raise HTTPException(status_code=422, detail=str(exc))
     except Exception as exc:
         traceback.print_exc()
-        raise HTTPException(status_code=502, detail=f"Content generation error: {exc}")
+        raise HTTPException(status_code=502, detail=f"Export failed ({type(exc).__name__}): {str(exc)[:300]}")
 
     return {
         "content":       ai_content,
@@ -1865,6 +1869,18 @@ def _build_csv(stored: QueryResult) -> bytes:
 
     return buf.getvalue().encode("utf-8")
 
+def _clean_msg_for_export(content: str) -> str:
+    """Strip chart HTML blocks and truncate long messages before sending to export Claude call."""
+    # Remove fenced html blocks — chart HTML is 3000-8000 tokens each, useless in export prompt
+    content = re.sub(r'```html[\s\S]*?```', '[CHART/VISUAL OMITTED]', content)
+    # Remove any inline script tags that leaked through
+    content = re.sub(r'<script[\s\S]*?</script>', '', content, flags=re.IGNORECASE)
+    # Remove large base64 or data URIs
+    content = re.sub(r'data:[a-z/]+;base64,[A-Za-z0-9+/=]{100,}', '[BASE64 DATA OMITTED]', content)
+    # Truncate single messages that are still huge
+    if len(content) > 4000:
+        content = content[:4000] + "\n… [message truncated for export]"
+    return content.strip()
 
 # =============================================================================
 # Export content generation
@@ -1879,62 +1895,119 @@ def _generate_export_content(
 ) -> str:
     selected_model = ALLOWED_MODELS["sonnet"]
 
+    # Build cleaned conversation text
     conv_text = "\n\n".join(
-        f"{'USER' if m.role == 'user' else 'DIUD AGENT'}: {m.content}"
+        f"{'USER' if m.role == 'user' else 'DIUD AGENT'}: {_clean_msg_for_export(m.content)}"
         for m in conversation
     )
 
+    # Hard cap on total conversation text
+    if len(conv_text) > 50000:
+        conv_text = conv_text[:50000] + "\n\n[Earlier conversation truncated to fit context window]"
+
     format_hint = (
-        "Format as a PowerPoint: use SLIDE: <title> for each slide, then bullet points."
+        "Format as a PowerPoint presentation. Use 'SLIDE: <Title>' for each slide header, "
+        "followed by bullet points starting with '- '. Each slide should have 4-8 bullets. "
+        "Create 6-10 slides covering: title, executive summary, key metrics, pipeline breakdown, "
+        "insights, recommendations."
         if export_type == "pptx"
-        else "Format as a professional PDF report: ## section headers, narrative prose, tables."
+        else
+        "Format as a professional PDF report using '## Section Title' for each section. "
+        "Write in narrative prose. Use markdown tables for data. Bold key numbers."
     )
-    detail_hint = (
-        "Include all metrics and insights. The full deal table will be appended automatically — "
-        "just write a [DEAL_TABLE_PLACEHOLDER] marker where it should appear."
-        if detail_level == "detailed"
-        else "Executive summary only — key metrics and top insights, no raw deal list."
-    )
+
+    if detail_level == "detailed":
+        detail_instruction = f"""
+TASK: Write the COMPLETE FULL DOCUMENT capturing the ENTIRE conversation below.
+- Include EVERY question the user asked and EVERY answer DIUD gave
+- Include ALL data tables, metrics, numbers, deal lists, and analysis discussed
+- Do NOT summarise or skip anything — this is a full transcript-style report
+- Structure it logically with one section per topic discussed
+- Include a [DEAL_TABLE_PLACEHOLDER] marker where raw deal data should appear
+- Today: {date.today().strftime('%B %d, %Y')}
+- Generate the COMPLETE document — do not stop early
+"""
+    else:
+        detail_instruction = f"""
+TASK: Write a concise EXECUTIVE SUMMARY of the conversation below.
+- Summarise the key questions asked and the most important findings
+- Highlight the top 3-5 metrics or insights discovered
+- Include key recommendations if any were made
+- Keep it to 1-2 pages maximum — this is a summary, not a full report
+- Do NOT include raw deal lists or detailed tables
+- Today: {date.today().strftime('%B %d, %Y')}
+"""
 
     dataset_hint = ""
     if stored_dataset:
         dataset_hint = (
-            f"\n\nDATASET CONTEXT: The query returned {stored_dataset.total_rows} records "
+            f"\n\nDATASET CONTEXT: The last query returned {stored_dataset.total_rows} records "
             f"with columns: {', '.join(stored_dataset.columns[:12])}. "
             f"Filters: {stored_dataset.filters_applied}. "
-            f"The complete table will be injected at [DEAL_TABLE_PLACEHOLDER]."
+            f"The complete data table will be injected at [DEAL_TABLE_PLACEHOLDER]."
         )
 
     prompt = f"""You are preparing a professional {export_type.upper()} export document.
 
-CONVERSATION:
+CONVERSATION TRANSCRIPT:
 {conv_text}
 {dataset_hint}
 
-TASK: Create "{title}"
+DOCUMENT TITLE: "{title}"
 
 {format_hint}
-{detail_hint}
+
+{detail_instruction}
 
 REQUIREMENTS:
-- Executive summary at the start with key numbers
-- Logical sections: summary, key metrics, insights, recommendations
-- If this is a deal list export, include [DEAL_TABLE_PLACEHOLDER] where the full table belongs
-- Bold key numbers; clean professional tone
-- Today: {date.today().strftime('%B %d, %Y')}
-- Generate the COMPLETE document — do not truncate or stop early
+- Never fabricate numbers — only use figures explicitly stated in the conversation above
+- Bold all key numbers and metrics
+- Professional tone throughout
+- Generate the COMPLETE document now. Do not truncate or stop early:"""
 
-Generate the document now:"""
+    # Log prompt size for debugging
+    prompt_tokens_est = len(prompt) // 4
+    print(f"📄 Export prompt: {len(prompt):,} chars (~{prompt_tokens_est:,} tokens est.)")
 
-    response = _ai_client.messages.create(
-        model   = selected_model,
-        system  = "You are a professional business report writer. Generate clean, well-structured, COMPLETE documents. Never truncate mid-section.",
-        messages= [{"role": "user", "content": prompt}],
-        temperature = 0,
-        max_tokens  = EXPORT_MAX_TOKENS,   # FIX 1: was hardcoded 4096
-    )
+    # Emergency truncation if still too large
+    if prompt_tokens_est > 150000:
+        print(f"⚠️  Prompt too large — hard truncating conv_text")
+        conv_text = conv_text[:20000] + "\n\n[Conversation hard-truncated — too large]"
+        prompt = prompt.replace(
+            conv_text,
+            conv_text[:20000] + "\n\n[Conversation hard-truncated — too large]"
+        )
+
+    # Call Claude with proper error handling
+    try:
+        response = _ai_client.messages.create(
+            model       = selected_model,
+            system      = "You are a professional business report writer. Generate clean, well-structured, COMPLETE documents. Never truncate mid-section.",
+            messages    = [{"role": "user", "content": prompt}],
+            temperature = 0,
+            max_tokens  = EXPORT_MAX_TOKENS,
+            timeout     = 120,
+        )
+    except anthropic.BadRequestError as e:
+        print(f"❌ Anthropic BadRequestError: {e}")
+        raise ValueError(f"Export prompt too large. Try 'Summary' mode or start a New Chat. Detail: {str(e)[:200]}")
+    except anthropic.APITimeoutError as e:
+        print(f"❌ Anthropic timeout: {e}")
+        raise ValueError("Export timed out. Try 'Summary' mode instead of 'Entire Conversation'.")
+    except anthropic.APIStatusError as e:
+        print(f"❌ Anthropic API status error {e.status_code}: {e.message}")
+        raise ValueError(f"AI service error ({e.status_code}): {e.message[:200]}")
+    except Exception as e:
+        print(f"❌ Unexpected export error: {type(e).__name__}: {e}")
+        raise
+
+    # Guard against empty response
     ai_text = _extract_text(response.content)
+    if not ai_text or len(ai_text.strip()) < 50:
+        print(f"⚠️  Empty export response. stop_reason={response.stop_reason}")
+        ai_text = f"## {title}\n\nSummary could not be generated. Please try again with 'Summary' mode."
 
+    # Inject deal table if available
     if stored_dataset and stored_dataset.total_rows > 0:
         table_md  = _rows_to_markdown_table(stored_dataset)
         meta_line = (
