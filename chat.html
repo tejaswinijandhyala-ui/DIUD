@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Decision Intelligence Using Data (DIUD)</title>
-  <link rel="icon" type="image/png" href="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png">
+  <link rel="icon" type="image/png" href="logo.png">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
   <style>
@@ -173,10 +173,6 @@
     .chat-pane {
       flex: 1; display: flex; flex-direction: column; overflow: hidden;
       transition: var(--panel-trans);
-      /* when export panel open, chat pane shrinks */
-    }
-    .body-wrap.panel-open .chat-pane {
-      /* do not force width; we let flex handle it */
     }
     .messages {
       flex: 1; overflow-y: auto;
@@ -205,7 +201,7 @@
     #welcome p  { font-size: 13.5px; color: var(--txt-mid); max-width: 420px; line-height: 1.6; }
 
     /* ── Message bubbles ─────────────────────────────────────────────────── */
-    .msg { display: flex; gap: 12px; max-width: 860px; width: 100%; }
+    .msg { display: flex; gap: 12px; max-width: 900px; width: 100%; }
     .msg.user      { flex-direction: row-reverse; align-self: flex-end; }
     .msg.assistant { align-self: flex-start; }
     .msg-avatar {
@@ -236,11 +232,8 @@
     }
     .msg-time { font-size: 10.5px; color: var(--txt-dim); padding: 0 4px; }
 
-    /* ── Message action row (retry, copy) ────────────────────────────────── */
     /* ── Error bubble + Retry button ────────────────────────────────────── */
-    .msg-error-wrap {
-      display: flex; flex-direction: column; gap: 8px;
-    }
+    .msg-error-wrap { display: flex; flex-direction: column; gap: 8px; }
     .msg-error-bubble {
       padding: 12px 16px; border-radius: var(--radius);
       font-size: 13.5px; line-height: 1.6;
@@ -261,10 +254,7 @@
     .msg-retry-btn:hover:not(:disabled) { background: var(--blue-lt); }
     .msg-retry-btn:disabled { opacity: .5; cursor: not-allowed; }
     .msg-retry-btn svg { width: 13px; height: 13px; }
-    .msg-retry-btn.retrying {
-      color: var(--accent); border-color: var(--accent);
-      animation: pulse-btn .8s infinite alternate;
-    }
+    .msg-retry-btn.retrying { color: var(--accent); border-color: var(--accent); animation: pulse-btn .8s infinite alternate; }
     @keyframes pulse-btn { to { opacity: .4; } }
 
     /* ── Copy button beneath assistant bubbles ──────────────────────────── */
@@ -282,14 +272,13 @@
       border: 1px solid var(--border);
       background: var(--card); color: var(--txt-dim);
       font-size: 11.5px; font-weight: 500; cursor: pointer;
-      font-family: inherit; transition: all .15s;
-      line-height: 1;
+      font-family: inherit; transition: all .15s; line-height: 1;
     }
     .msg-copy-btn:hover { background: var(--blue-lt); color: var(--accent); border-color: var(--accent); }
     .msg-copy-btn.copied { color: #16a34a; border-color: #bbf7d0; background: #f0fdf4; }
     .msg-copy-btn svg { width: 12px; height: 12px; flex-shrink: 0; }
 
-    /* Markdown inside assistant bubbles */
+    /* ── Markdown inside assistant bubbles ──────────────────────────────── */
     .chat-md { overflow-x: auto; }
     .chat-md p  { margin-bottom: 8px; }
     .chat-md p:last-child { margin-bottom: 0; }
@@ -301,7 +290,7 @@
     .chat-md strong { font-weight: 600; }
     .chat-md code {
       background: #F1F5F9; padding: 2px 5px; border-radius: 4px;
-      font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #0D1B3E;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 12px; color: #0D1B3E;
     }
     .chat-md pre {
       background: #0D1B3E; color: #E2E8F0; padding: 14px;
@@ -313,11 +302,42 @@
     .chat-md th { background: var(--navy); color: white; padding: 8px 12px; text-align: left; font-weight: 600; }
     .chat-md td { padding: 7px 12px; border-bottom: 1px solid var(--border); }
     .chat-md tr:nth-child(even) td { background: #F8FAFC; }
-    .chat-md .inline-visual {
-  margin: 10px 0;
-  border-radius: 12px;
-  overflow: hidden;
-}
+
+    /* ── Inline Visual (HTML from Claude) — sandboxed iframe ───────────── */
+    .inline-visual-wrap {
+      margin: 14px 0;
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 4px 24px rgba(13,27,62,.13);
+      border: 1px solid rgba(13,27,62,.08);
+      background: #0D1B3E; /* dark fallback while loading */
+      position: relative;
+    }
+    .inline-visual-wrap iframe {
+      display: block;
+      width: 100%;
+      border: none;
+      border-radius: 14px;
+      min-height: 120px;
+      transition: height .3s ease;
+      background: transparent;
+    }
+    /* Small label badge */
+    .inline-visual-badge {
+      position: absolute;
+      top: 8px; right: 10px;
+      background: rgba(255,255,255,.12);
+      backdrop-filter: blur(4px);
+      border: 1px solid rgba(255,255,255,.2);
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-size: 10px;
+      font-weight: 600;
+      color: rgba(255,255,255,.7);
+      letter-spacing: .5px;
+      pointer-events: none;
+      z-index: 2;
+    }
 
     /* ── Typing indicator ────────────────────────────────────────────────── */
     .typing-indicator { display: flex; gap: 5px; padding: 12px 16px; align-items: center; }
@@ -356,7 +376,9 @@
     #send-btn:disabled { opacity: .4; cursor: not-allowed; }
     #send-btn svg { width: 18px; height: 18px; }
     .input-hint { font-size: 11px; color: var(--txt-dim); }
-        .model-pill {
+
+    /* ── Model pill ──────────────────────────────────────────────────────── */
+    .model-pill {
       display: inline-flex; align-items: center; gap: 6px;
       padding: 4px 10px 4px 8px; border-radius: 20px;
       border: 1.5px solid var(--border); background: var(--card);
@@ -378,7 +400,6 @@
       display: none;
     }
     .model-dropdown.open { display: block; }
-
     .model-option {
       display: flex; flex-direction: column; gap: 2px;
       padding: 9px 12px; border-radius: 7px; cursor: pointer; transition: background .12s;
@@ -387,7 +408,6 @@
     .model-option.active { background: var(--blue-lt); }
     .model-option-name { font-size: 12.5px; font-weight: 600; color: var(--txt-main); display: flex; align-items: center; gap: 6px; }
     .model-option-desc { font-size: 11px; color: var(--txt-dim); }
-
 
     /* ── Toast ───────────────────────────────────────────────────────────── */
     #toast {
@@ -402,37 +422,27 @@
     #toast.error   { background: var(--red); }
 
     /* ================================================================
-       EXPORT SIDE PANEL — Claude-style
+       EXPORT SIDE PANEL
        ================================================================ */
-
     .export-panel {
-      width: 0;
-      min-width: 0;
+      width: 0; min-width: 0;
       background: var(--white);
       border-left: 1px solid var(--border);
       display: flex; flex-direction: column;
       overflow: hidden;
       transition: var(--panel-trans);
-      flex-shrink: 0;
-      position: relative;
+      flex-shrink: 0; position: relative;
       box-shadow: -4px 0 24px rgba(13,27,62,.07);
     }
-    .export-panel.open {
-      width: var(--panel-w);
-      min-width: var(--panel-w);
-    }
+    .export-panel.open { width: var(--panel-w); min-width: var(--panel-w); }
 
-    /* Panel header */
     .ep-header {
       padding: 18px 20px 14px;
       border-bottom: 1px solid var(--border);
       display: flex; flex-direction: column; gap: 14px;
-      flex-shrink: 0;
-      background: var(--white);
+      flex-shrink: 0; background: var(--white);
     }
-    .ep-header-row {
-      display: flex; align-items: center; justify-content: space-between;
-    }
+    .ep-header-row { display: flex; align-items: center; justify-content: space-between; }
     .ep-title {
       font-size: 14px; font-weight: 700; color: var(--navy);
       display: flex; align-items: center; gap: 8px;
@@ -446,20 +456,10 @@
     .ep-close:hover { background: var(--bg); color: var(--txt-main); }
     .ep-close svg { width: 14px; height: 14px; }
 
-    /* Config controls */
-    .ep-config {
-      display: flex; flex-direction: column; gap: 10px;
-    }
-    .ep-config-row {
-      display: flex; gap: 8px; align-items: center;
-    }
-    .ep-input-group {
-      display: flex; flex-direction: column; gap: 4px; flex: 1;
-    }
-    .ep-label {
-      font-size: 10px; font-weight: 600; color: var(--txt-dim);
-      text-transform: uppercase; letter-spacing: .5px;
-    }
+    .ep-config { display: flex; flex-direction: column; gap: 10px; }
+    .ep-config-row { display: flex; gap: 8px; align-items: center; }
+    .ep-input-group { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+    .ep-label { font-size: 10px; font-weight: 600; color: var(--txt-dim); text-transform: uppercase; letter-spacing: .5px; }
     .ep-input {
       padding: 7px 10px; border-radius: 7px; border: 1.5px solid var(--border);
       font-family: inherit; font-size: 12.5px; color: var(--txt-main);
@@ -476,38 +476,30 @@
     }
     .ep-select:focus { border-color: var(--accent); background-color: white; }
 
-    /* Generate button */
     .ep-generate-btn {
       padding: 9px 18px; border-radius: 9px; border: none;
       background: linear-gradient(135deg, #1565C0, #1E88E5);
       color: white; font-size: 12.5px; font-weight: 600;
       cursor: pointer; font-family: inherit; transition: opacity .15s;
       display: flex; align-items: center; gap: 7px; justify-content: center;
-      box-shadow: 0 3px 12px rgba(30,136,229,.3);
-      white-space: nowrap;
+      box-shadow: 0 3px 12px rgba(30,136,229,.3); white-space: nowrap;
     }
     .ep-generate-btn:hover:not(:disabled) { opacity: .88; }
     .ep-generate-btn:disabled { opacity: .45; cursor: not-allowed; }
     .ep-generate-btn svg { width: 14px; height: 14px; }
 
-    /* Panel body */
-    .ep-body {
-      flex: 1; overflow-y: auto; position: relative;
-    }
+    .ep-body { flex: 1; overflow-y: auto; position: relative; }
     .ep-body::-webkit-scrollbar { width: 4px; }
     .ep-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
-    /* Loading state */
     .ep-loading {
       display: none; flex-direction: column; align-items: center;
       justify-content: center; height: 100%; gap: 20px; padding: 40px;
     }
     .ep-loading.visible { display: flex; }
     .ep-spinner {
-      width: 44px; height: 44px;
-      border: 3px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
+      width: 44px; height: 44px; border: 3px solid var(--border);
+      border-top-color: var(--accent); border-radius: 50%;
       animation: spin .8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -516,11 +508,9 @@
       font-size: 11px; color: var(--txt-dim); display: flex; align-items: center;
       gap: 6px; animation: fadeInUp .4s ease;
     }
-    .ep-loading-step.done { color: var(--green); }
     .ep-loading-step svg { width: 12px; height: 12px; }
     @keyframes fadeInUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
-    /* Empty state */
     .ep-empty {
       display: flex; flex-direction: column; align-items: center;
       justify-content: center; height: 100%; gap: 14px; padding: 40px; text-align: center;
@@ -534,10 +524,7 @@
     .ep-empty h3 { font-size: 14px; font-weight: 600; color: var(--navy); }
     .ep-empty p  { font-size: 12.5px; color: var(--txt-dim); max-width: 280px; line-height: 1.5; }
 
-    /* Preview content */
-    .ep-preview {
-      display: none; padding: 20px;
-    }
+    .ep-preview { display: none; padding: 20px; }
     .ep-preview.visible { display: block; }
     .ep-preview-meta {
       display: flex; align-items: center; gap: 8px; margin-bottom: 14px;
@@ -546,14 +533,9 @@
     .ep-preview-meta svg { width: 14px; height: 14px; color: var(--accent); }
     .ep-preview-meta span { font-size: 11.5px; color: var(--blue); font-weight: 500; }
 
-    /* Rendered preview markdown */
     .ep-md { font-size: 12.5px; line-height: 1.65; color: var(--txt-main); }
     .ep-md h1 { font-size: 16px; font-weight: 700; color: var(--navy); margin: 0 0 12px; }
-    .ep-md h2 {
-      font-size: 13px; font-weight: 700; color: var(--white);
-      background: var(--navy); padding: 6px 10px; border-radius: 6px;
-      margin: 18px 0 8px;
-    }
+    .ep-md h2 { font-size: 13px; font-weight: 700; color: var(--white); background: var(--navy); padding: 6px 10px; border-radius: 6px; margin: 18px 0 8px; }
     .ep-md h3 { font-size: 12px; font-weight: 600; color: var(--blue); margin: 12px 0 4px; }
     .ep-md p  { margin-bottom: 8px; }
     .ep-md ul { padding-left: 16px; margin-bottom: 8px; }
@@ -563,22 +545,12 @@
     .ep-md th { background: var(--navy); color: white; padding: 6px 10px; text-align: left; font-size: 11px; }
     .ep-md td { padding: 5px 10px; border-bottom: 1px solid var(--border); }
     .ep-md tr:nth-child(even) td { background: #F8FAFC; }
-    .ep-md blockquote {
-      border-left: 3px solid var(--accent); padding: 8px 12px;
-      background: var(--blue-lt); border-radius: 0 6px 6px 0;
-      margin: 8px 0; color: var(--txt-mid);
-    }
-    .ep-md code {
-      background: #F1F5F9; padding: 1px 4px; border-radius: 4px;
-      font-family: monospace; font-size: 11px;
-    }
+    .ep-md blockquote { border-left: 3px solid var(--accent); padding: 8px 12px; background: var(--blue-lt); border-radius: 0 6px 6px 0; margin: 8px 0; color: var(--txt-mid); }
+    .ep-md code { background: #F1F5F9; padding: 1px 4px; border-radius: 4px; font-family: monospace; font-size: 11px; }
 
-    /* Panel footer / download bar */
     .ep-footer {
-      padding: 14px 20px;
-      border-top: 1px solid var(--border);
-      background: var(--bg);
-      display: flex; gap: 8px; align-items: center; flex-shrink: 0;
+      padding: 14px 20px; border-top: 1px solid var(--border);
+      background: var(--bg); display: flex; gap: 8px; align-items: center; flex-shrink: 0;
     }
     .ep-footer.hidden { display: none; }
 
@@ -608,21 +580,11 @@
     .ep-regen-btn:hover { background: var(--bg); color: var(--txt-main); border-color: var(--accent); }
     .ep-regen-btn svg { width: 14px; height: 14px; }
 
-    /* Progress bar */
-    .ep-progress-wrap {
-      padding: 0 20px 10px; display: none; flex-direction: column; gap: 4px;
-    }
+    .ep-progress-wrap { padding: 0 20px 10px; display: none; flex-direction: column; gap: 4px; }
     .ep-progress-wrap.visible { display: flex; }
     .ep-progress-label { font-size: 11px; color: var(--txt-dim); }
-    .ep-progress-bar {
-      height: 3px; background: var(--border); border-radius: 2px; overflow: hidden;
-    }
-    .ep-progress-fill {
-      height: 100%; background: linear-gradient(90deg, var(--blue), var(--accent));
-      border-radius: 2px; transition: width .5s ease;
-      width: 0%;
-    }
-
+    .ep-progress-bar { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+    .ep-progress-fill { height: 100%; background: linear-gradient(90deg, var(--blue), var(--accent)); border-radius: 2px; transition: width .5s ease; width: 0%; }
   </style>
 </head>
 <body>
@@ -648,7 +610,6 @@
   </div>
 </div>
 
-
 <!-- ── Topbar ─────────────────────────────────────────────────────────────── -->
 <header class="topbar">
   <div class="topbar-brand">
@@ -661,9 +622,7 @@
     </div>
   </div>
   <div class="topbar-actions">
-    <a href="/debug/db" target="_blank" class="debug-link" title="Test ClickHouse connectivity">
-      🔌 Debug DB
-    </a>
+    <a href="/debug/db" target="_blank" class="debug-link" title="Test ClickHouse connectivity">🔌 Debug DB</a>
     <button class="new-chat-btn" onclick="newChat()">+ New Chat</button>
   </div>
 </header>
@@ -698,10 +657,9 @@
     <hr class="sidebar-divider"/>
 
     <div class="sidebar-label">📥 Export</div>
-    <button class="suggestion-chip" onclick="sendSuggestion('Export this conversation as a PDF report')">📄 Export as PDF report</button>
+    <button class="suggestion-chip" onclick="sendSuggestion('Export this conversation as a PDF report')">📄 Export as report</button>
     <button class="suggestion-chip" onclick="sendSuggestion('Create a presentation from this conversation')">📊 Create a presentation</button>
 
-    <!-- Connection status -->
     <div id="conn-badge" class="conn-badge checking" style="margin-top:auto;"
          onclick="checkConn()" title="Click to recheck ClickHouse connection">
       <span class="dot"></span>
@@ -727,52 +685,45 @@
 
     <div class="input-area">
       <div class="input-row">
-  <div style="position:relative;">
-    <div class="model-pill" id="model-pill" onclick="toggleModelDropdown()">
-      <span class="model-dot"></span>
-      <span id="model-pill-label">Sonnet</span>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-           style="width:11px;height:11px;opacity:.6"><polyline points="6 9 12 15 18 9"/></svg>
-    </div>
-    <div class="model-dropdown" id="model-dropdown">
-      <div class="model-option active" id="opt-sonnet" onclick="selectModel('sonnet')">
-        <div class="model-option-name">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-               style="width:13px;height:13px;color:var(--accent)">
-            <circle cx="12" cy="12" r="10"/><polyline points="20 6 9 17 4 12"/>
-          </svg>
-          claude-sonnet-4-5
+        <div style="position:relative;">
+          <div class="model-pill" id="model-pill" onclick="toggleModelDropdown()">
+            <span class="model-dot"></span>
+            <span id="model-pill-label">Sonnet</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+                 style="width:11px;height:11px;opacity:.6"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+          <div class="model-dropdown" id="model-dropdown">
+            <div class="model-option active" id="opt-sonnet" onclick="selectModel('sonnet')">
+              <div class="model-option-name">
+                ...
+                claude-sonnet-4-6
+              </div>
+              <div class="model-option-desc">Fast · Best for most queries</div>
+            </div>
+            <div class="model-option" id="opt-opus" onclick="selectModel('opus')">
+              <div class="model-option-name" style="color:#7C3AED;">
+                ...
+                claude-opus-4-6
+              </div>
+              <div class="model-option-desc">More powerful · Complex analysis</div>
+            </div>
+          </div>
         </div>
-        <div class="model-option-desc">Fast · Best for most queries</div>
-      </div>
-      <div class="model-option" id="opt-opus" onclick="selectModel('opus')">
-        <div class="model-option-name" style="color:#7C3AED;">
-          <svg viewBox="0 0 24 24" fill="none" stroke="#7C3AED" stroke-width="2.5"
-               style="width:13px;height:13px;opacity:0">
-            <circle cx="12" cy="12" r="10"/><polyline points="20 6 9 17 4 12"/>
+        <textarea id="chat-input" rows="1"
+          placeholder="Ask about pipeline, deals, AEs, win rates… or say 'export as PDF'"
+          onkeydown="handleKey(event)"></textarea>
+        <button id="send-btn" onclick="send()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
           </svg>
-          claude-opus-4-5
-        </div>
-        <div class="model-option-desc">More powerful · Complex analysis</div>
+        </button>
       </div>
     </div>
-  </div>
-  <textarea id="chat-input" rows="1"
-    placeholder="Ask about pipeline, deals, AEs, win rates… or say 'export as PDF'"
-    onkeydown="handleKey(event)"></textarea>
-  <button id="send-btn" onclick="send()">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-      <line x1="22" y1="2" x2="11" y2="13"/>
-      <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-    </svg>
-  </button>
-</div>
   </main>
 
   <!-- ── Export Side Panel ──────────────────────────────────────────────── -->
   <aside class="export-panel" id="export-panel">
-
-    <!-- Panel header -->
     <div class="ep-header">
       <div class="ep-header-row">
         <div class="ep-title">
@@ -790,8 +741,6 @@
           </svg>
         </button>
       </div>
-
-      <!-- Config controls -->
       <div class="ep-config">
         <div class="ep-input-group">
           <div class="ep-label">Document Title</div>
@@ -809,7 +758,7 @@
           <div class="ep-input-group" id="ep-detail-group">
             <div class="ep-label">Detail Level</div>
             <select class="ep-select" id="ep-detail">
-              <option value="detailed">Detailed</option>
+              <option value="detailed">Entire Conversation</option>
               <option value="summary">Summary</option>
             </select>
           </div>
@@ -821,23 +770,16 @@
           </svg>
           Generate Preview
         </button>
-        <!-- Dataset badge: shown when a query result is stored for this session -->
         <div id="ep-dataset-badge" style="display:none;align-items:center;gap:6px;padding:6px 10px;background:#E8F5E9;border-radius:7px;font-size:11.5px;color:#2E7D32;font-weight:500;border:1px solid #C8E6C9;"></div>
       </div>
     </div>
 
-    <!-- Progress bar (during generation) -->
     <div class="ep-progress-wrap" id="ep-progress-wrap">
       <div class="ep-progress-label" id="ep-progress-label">Analysing conversation…</div>
-      <div class="ep-progress-bar">
-        <div class="ep-progress-fill" id="ep-progress-fill"></div>
-      </div>
+      <div class="ep-progress-bar"><div class="ep-progress-fill" id="ep-progress-fill"></div></div>
     </div>
 
-    <!-- Body: loading / empty / preview -->
     <div class="ep-body" id="ep-body">
-
-      <!-- Empty state -->
       <div class="ep-empty" id="ep-empty">
         <div class="ep-empty-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -848,34 +790,25 @@
         <h3>Configure & Preview</h3>
         <p>Set your document title, format, and detail level above, then click <strong>Generate Preview</strong> to see a formatted preview before downloading.</p>
       </div>
-
-      <!-- Loading state -->
       <div class="ep-loading" id="ep-loading">
         <div class="ep-spinner"></div>
         <div class="ep-loading-text">
           <strong>AI is preparing your document…</strong><br>
           <span style="font-size:11.5px;color:var(--txt-dim)">Extracting insights from your conversation</span>
         </div>
-        <div style="display:flex;flex-direction:column;gap:6px;width:100%;max-width:280px;" id="ep-steps">
-          <!-- Steps added dynamically -->
-        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;width:100%;max-width:280px;" id="ep-steps"></div>
       </div>
-
-      <!-- Preview content -->
       <div class="ep-preview" id="ep-preview">
         <div class="ep-preview-meta" id="ep-preview-meta">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/>
-            <polyline points="12 6 12 12 16 14"/>
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
           </svg>
           <span id="ep-preview-meta-text">Preview ready</span>
         </div>
         <div class="ep-md" id="ep-preview-content"></div>
       </div>
+    </div>
 
-    </div><!-- /ep-body -->
-
-    <!-- Footer download buttons -->
     <div class="ep-footer hidden" id="ep-footer">
       <button class="ep-regen-btn" onclick="generatePreview()" title="Regenerate">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -898,7 +831,6 @@
         </svg>
         Download PPTX
       </button>
-      <!-- CSV: full dataset from server session store, no row cap -->
       <button class="ep-download-btn btn-csv-dl" id="ep-dl-csv" onclick="downloadCSV()" style="display:none;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -907,10 +839,8 @@
         <span id="ep-csv-label">Download CSV</span>
       </button>
     </div>
-
-  </aside><!-- /export-panel -->
-
-</div><!-- /body-wrap -->
+  </aside>
+</div>
 
 <div id="toast"></div>
 
@@ -918,50 +848,122 @@
   /* ======================================================================
      STATE
      ====================================================================== */
-  const SESSION_ID  = crypto.randomUUID();   // stable for this browser tab
-  let history       = [];        // chat history [{role, content}]
-  let busy          = false;     // chat in-flight
-  let panelOpen     = false;     // export panel visible?
-  let previewContent = null;     // last generated markdown content
-  let exportBusy    = false;     // export generation in-flight
-  let datasetRows   = 0;         // rows in server-side session store
-  let selectedModel = "sonnet";
-
-function toggleModelDropdown() {
-  document.getElementById("model-dropdown").classList.toggle("open");
-}
-
-function selectModel(m) {
-  selectedModel = m;
-  const pill   = document.getElementById("model-pill");
-  const label  = document.getElementById("model-pill-label");
-  const optS   = document.getElementById("opt-sonnet");
-  const optO   = document.getElementById("opt-opus");
-  const checkS = optS.querySelector("svg");
-  const checkO = optO.querySelector("svg");
-
-  if (m === "opus") {
-    label.textContent = "Opus";
-    pill.classList.add("opus");
-    optO.classList.add("active");    optS.classList.remove("active");
-    checkO.style.opacity = "1";      checkS.style.opacity = "0";
-  } else {
-    label.textContent = "Sonnet";
-    pill.classList.remove("opus");
-    optS.classList.add("active");    optO.classList.remove("active");
-    checkS.style.opacity = "1";      checkO.style.opacity = "0";
-  }
-  document.getElementById("model-dropdown").classList.remove("open");
-}
-
-document.addEventListener("click", (e) => {
-  if (!e.target.closest("#model-pill") && !e.target.closest("#model-dropdown")) {
-    document.getElementById("model-dropdown")?.classList.remove("open");
-  }
-});
+  const SESSION_ID   = crypto.randomUUID();
+  let history        = [];
+  let busy           = false;
+  let panelOpen      = false;
+  let previewContent = null;
+  let exportBusy     = false;
+  let datasetRows    = 0;
+  let selectedModel  = "sonnet";
 
   /* ======================================================================
-     EXPORT FORMAT DETECTION (used to pre-fill the panel selector)
+     MARKED CONFIG — sandboxed iframe for HTML blocks
+     ====================================================================== */
+  const renderer = new marked.Renderer();
+
+  // Override fenced code blocks: html → sandboxed iframe, others → styled <pre>
+  renderer.code = function(code, lang) {
+    if (lang === 'html') {
+      // Inject font + reset into the srcdoc so the chart looks self-contained
+      const doc = `<!DOCTYPE html><html><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:transparent;font-family:'Inter',system-ui,sans-serif;overflow:hidden;}
+</style>
+</head><body>${code}
+<script>
+  // Auto-resize: tell parent the real height after render
+  function notifyHeight(){
+    var h=document.body.scrollHeight||document.documentElement.scrollHeight;
+    parent.postMessage({type:'diud-iframe-height',height:h},'*');
+  }
+  // Fire on load + after short delay for any dynamic content
+  window.addEventListener('load',function(){notifyHeight();setTimeout(notifyHeight,300);setTimeout(notifyHeight,800);});
+  new MutationObserver(notifyHeight).observe(document.body,{childList:true,subtree:true,attributes:true});
+<\/script>
+</body></html>`;
+      const id = 'iv-' + Math.random().toString(36).slice(2,9);
+      // srcdoc is set via JS to avoid HTML escaping issues with backticks etc.
+      return `<div class="inline-visual-wrap" id="wrap-${id}">
+  <span class="inline-visual-badge">VISUAL</span>
+  <iframe id="${id}" sandbox="allow-scripts" scrolling="no"
+    style="height:300px;"
+    data-srcdoc="${encodeURIComponent(doc)}"></iframe>
+</div>`;
+    }
+    // Regular code block
+    const escaped = code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const cls = lang ? ` class="language-${lang}"` : '';
+    return `<pre><code${cls}>${escaped}</code></pre>`;
+  };
+
+  marked.setOptions({ breaks: true, gfm: true, renderer });
+
+  /* ======================================================================
+     IFRAME HEIGHT LISTENER
+     After marked injects iframe markup into the DOM, we set srcdoc and
+     listen for postMessage to auto-size the iframe to its real content.
+     ====================================================================== */
+  window.addEventListener('message', function(e) {
+    if (!e.data || e.data.type !== 'diud-iframe-height') return;
+    // Find the iframe that sent this message
+    const iframes = document.querySelectorAll('.inline-visual-wrap iframe');
+    iframes.forEach(function(f) {
+      try {
+        if (f.contentWindow === e.source) {
+          const h = Math.max(80, Math.min(e.data.height + 24, 900));
+          f.style.height = h + 'px';
+        }
+      } catch(_) {}
+    });
+  });
+
+  // Called after appendBubble inserts HTML — hydrate deferred iframes
+  function hydrateIframes(container) {
+    container.querySelectorAll('iframe[data-srcdoc]').forEach(function(f) {
+      if (f.dataset.srcdocLoaded) return;
+      f.dataset.srcdocLoaded = '1';
+      f.srcdoc = decodeURIComponent(f.dataset.srcdoc);
+      delete f.dataset.srcdoc;
+    });
+  }
+
+  /* ======================================================================
+     MODEL SWITCHER
+     ====================================================================== */
+  function toggleModelDropdown() {
+    document.getElementById('model-dropdown').classList.toggle('open');
+  }
+  function selectModel(m) {
+    selectedModel = m;
+    const pill  = document.getElementById('model-pill');
+    const label = document.getElementById('model-pill-label');
+    const optS  = document.getElementById('opt-sonnet');
+    const optO  = document.getElementById('opt-opus');
+    const chkS  = optS.querySelector('svg');
+    const chkO  = optO.querySelector('svg');
+    if (m === 'opus') {
+      label.textContent = 'Opus'; pill.classList.add('opus');
+      optO.classList.add('active'); optS.classList.remove('active');
+      chkO.style.opacity = '1'; chkS.style.opacity = '0';
+    } else {
+      label.textContent = 'Sonnet'; pill.classList.remove('opus');
+      optS.classList.add('active'); optO.classList.remove('active');
+      chkS.style.opacity = '1'; chkO.style.opacity = '0';
+    }
+    document.getElementById('model-dropdown').classList.remove('open');
+  }
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('#model-pill') && !e.target.closest('#model-dropdown'))
+      document.getElementById('model-dropdown')?.classList.remove('open');
+  });
+
+  /* ======================================================================
+     EXPORT FORMAT DETECTION
      ====================================================================== */
   function detectExportFormat(text) {
     if (/pptx|powerpoint|presentation|slide|deck/i.test(text)) return 'pptx';
@@ -974,48 +976,34 @@ document.addEventListener("click", (e) => {
      LOGIN
      ====================================================================== */
   const VALID_USERS = { "diud": "DiuD@2026" };
-
   function doLogin() {
-    const user = document.getElementById("login-user").value.trim();
-    const pass = document.getElementById("login-pass").value;
-    const err  = document.getElementById("login-error");
-    if (!user || !pass) { err.textContent = "Please enter username and password."; return; }
+    const user = document.getElementById('login-user').value.trim();
+    const pass = document.getElementById('login-pass').value;
+    const err  = document.getElementById('login-error');
+    if (!user || !pass) { err.textContent = 'Please enter username and password.'; return; }
     if (VALID_USERS[user.toLowerCase()] === pass) {
-      document.getElementById("login-overlay").style.display = "none";
-      err.textContent = "";
+      document.getElementById('login-overlay').style.display = 'none';
+      err.textContent = '';
     } else {
-      err.textContent = "Invalid username or password.";
-      document.getElementById("login-pass").value = "";
-      document.getElementById("login-pass").focus();
+      err.textContent = 'Invalid username or password.';
+      document.getElementById('login-pass').value = '';
+      document.getElementById('login-pass').focus();
     }
   }
-  document.getElementById("login-user").addEventListener("keydown", function(e) {
-    if (e.key === "Enter") document.getElementById("login-pass").focus();
+  document.getElementById('login-user').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') document.getElementById('login-pass').focus();
   });
-
-  /* ======================================================================
-     MARKED CONFIG
-     ====================================================================== */
-  const renderer = new marked.Renderer();
-const origCode = renderer.code.bind(renderer);
-renderer.code = function(code, lang) {
-  if (lang === 'html') {
-    return `<div class="inline-visual">${code}</div>`;
-  }
-  return origCode(code, lang);
-};
-marked.setOptions({ breaks: true, gfm: true, renderer });
 
   /* ======================================================================
      AUTO-RESIZE TEXTAREA
      ====================================================================== */
-  const input = document.getElementById("chat-input");
-  input.addEventListener("input", () => {
-    input.style.height = "auto";
-    input.style.height = Math.min(input.scrollHeight, 140) + "px";
+  const input = document.getElementById('chat-input');
+  input.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 140) + 'px';
   });
   function handleKey(e) {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   }
 
   /* ======================================================================
@@ -1024,27 +1012,19 @@ marked.setOptions({ breaks: true, gfm: true, renderer });
   async function send() {
     const text = input.value.trim();
     if (!text || busy) return;
-
-    const welcome = document.getElementById("welcome");
+    const welcome = document.getElementById('welcome');
     if (welcome) welcome.remove();
-
-    appendBubble("user", text);
-    history.push({ role: "user", content: text });
-    input.value = "";
-    input.style.height = "auto";
+    appendBubble('user', text);
+    history.push({ role: 'user', content: text });
+    input.value = '';
+    input.style.height = 'auto';
     setBusy(true);
-
-    // --- Send to server (Claude decides if it's an export intent) ---
     const typingId = addTyping();
     try {
-      const res = await fetch("/chat", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
-          message:    text,
-          history:    history.slice(0, -1),
-          session_id: SESSION_ID,
-        }),
+      const res = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, history: history.slice(0, -1), session_id: SESSION_ID, model: selectedModel }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -1052,152 +1032,96 @@ marked.setOptions({ breaks: true, gfm: true, renderer });
       }
       const data = await res.json();
       removeTyping(typingId);
-
-      // Update stored row count whenever the server updates its dataset
-      if (data.dataset_rows > 0) {
-        datasetRows = data.dataset_rows;
-        updateDatasetBadge();
-      }
-
-      // Server signals export intent via __EXPORT_INTENT__ in reply
+      if (data.dataset_rows > 0) { datasetRows = data.dataset_rows; updateDatasetBadge(); }
       if (data.export_intent) {
-        // Strip the marker from the visible reply
         const visibleReply = data.reply.replace('__EXPORT_INTENT__', '').trim();
-        appendBubble("assistant", visibleReply);
-        history.push({ role: "assistant", content: visibleReply });
-        const fmt = detectExportFormat(text);
-        openExportPanel(fmt);
+        appendBubble('assistant', visibleReply);
+        history.push({ role: 'assistant', content: visibleReply });
+        openExportPanel(detectExportFormat(text));
       } else {
-        appendBubble("assistant", data.reply);
-        history.push({ role: "assistant", content: data.reply });
+        appendBubble('assistant', data.reply);
+        history.push({ role: 'assistant', content: data.reply });
       }
-
-    } catch (err) {
+    } catch(err) {
       removeTyping(typingId);
-      // Show error bubble with Retry button — store the original message so retry can resend it
       appendErrorBubble(err.message, { message: text, historyLen: history.length });
-      showToast("Error: " + err.message, "error");
+      showToast('Error: ' + err.message, 'error');
     } finally {
       setBusy(false);
     }
   }
 
-  function sendSuggestion(text) {
-    input.value = text;
-    send();
-  }
-
+  function sendSuggestion(text) { input.value = text; send(); }
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   /* ======================================================================
-     RETRY — re-send the original user message after an error
-     Only appears on error bubbles, not on normal responses.
+     RETRY
      ====================================================================== */
   async function retryError(errorId) {
     if (busy) return;
-
-    // Find the error bubble DOM element
     const errEl   = document.querySelector(`[data-error-id="${errorId}"]`);
     const btn     = document.getElementById(`retrybtn-${errorId}`);
-    const origMsg = errEl ? errEl.dataset.retryMsg : "";
-
-    if (!origMsg) { showToast("Nothing to retry.", "error"); return; }
-
-    // Show retrying state on the button
+    const origMsg = errEl ? errEl.dataset.retryMsg : '';
+    if (!origMsg) { showToast('Nothing to retry.', 'error'); return; }
     if (btn) {
-      btn.disabled = true;
-      btn.classList.add("retrying");
-      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-        <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
-        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-      </svg> Retrying…`;
+      btn.disabled = true; btn.classList.add('retrying');
+      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Retrying…`;
     }
     setBusy(true);
-
-    // Build messages: full history (no failed assistant entry was added for errors)
-    // plus the original user message that failed
-    const messages = history.map(m => ({ role: m.role, content: m.content }));
-    messages.push({ role: "user", content: origMsg });
-
     try {
-      const res = await fetch("/chat", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
-          message:    origMsg,
-          history:    history,
-          session_id: SESSION_ID,
-        }),
+      const res = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: origMsg, history: history, session_id: SESSION_ID, model: selectedModel }),
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.detail || `HTTP ${res.status}`);
       }
       const data = await res.json();
-
-      if (data.dataset_rows > 0) {
-        datasetRows = data.dataset_rows;
-        updateDatasetBadge();
-      }
-
-      // Remove the error bubble — replace with the successful response
+      if (data.dataset_rows > 0) { datasetRows = data.dataset_rows; updateDatasetBadge(); }
       if (errEl) errEl.remove();
-
-      const reply = data.export_intent
-        ? data.reply.replace("__EXPORT_INTENT__", "").trim()
-        : data.reply;
-
-      // Re-add the user bubble (it was never added since the error happened mid-send)
-      appendBubble("user", origMsg);
-      history.push({ role: "user", content: origMsg });
-
-      appendBubble("assistant", reply);
-      history.push({ role: "assistant", content: reply });
-
+      const reply = data.export_intent ? data.reply.replace('__EXPORT_INTENT__', '').trim() : data.reply;
+      appendBubble('user', origMsg);
+      history.push({ role: 'user', content: origMsg });
+      appendBubble('assistant', reply);
+      history.push({ role: 'assistant', content: reply });
       if (data.export_intent) openExportPanel(detectExportFormat(origMsg));
-      showToast("✅ Retry succeeded", "success");
-
-    } catch (err) {
-      // Retry itself failed — restore the button so the user can try again
+      showToast('✅ Retry succeeded', 'success');
+    } catch(err) {
       if (btn) {
-        btn.disabled = false;
-        btn.classList.remove("retrying");
-        btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-          <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
-          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-        </svg> Retry`;
+        btn.disabled = false; btn.classList.remove('retrying');
+        btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Retry`;
       }
-      showToast("Retry failed: " + err.message, "error");
+      showToast('Retry failed: ' + err.message, 'error');
     } finally {
       setBusy(false);
     }
   }
 
-  /* Shows a small badge in the export panel when a dataset is ready */
   function updateDatasetBadge() {
-    const badge = document.getElementById("ep-dataset-badge");
+    const badge = document.getElementById('ep-dataset-badge');
     if (!badge) return;
     if (datasetRows > 0) {
       badge.textContent = `📊 ${datasetRows.toLocaleString()} rows ready to export`;
-      badge.style.display = "flex";
+      badge.style.display = 'flex';
     } else {
-      badge.style.display = "none";
+      badge.style.display = 'none';
     }
   }
 
   /* ======================================================================
      BUBBLE HELPERS
      ====================================================================== */
-  /* Normal assistant bubble — with copy button */
   function appendBubble(role, content) {
-    const msgs = document.getElementById("messages");
-    const now  = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const div  = document.createElement("div");
+    const msgs = document.getElementById('messages');
+    const now  = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const div  = document.createElement('div');
     div.className = `msg ${role}`;
     const diudAvatar = `<img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD" style="width:100%;height:100%;object-fit:contain;border-radius:8px;">`;
-    const initials = role === "user" ? "YOU" : diudAvatar;
+    const initials = role === 'user' ? 'YOU' : diudAvatar;
     let body;
-    if (role === "assistant") {
+    if (role === 'assistant') {
       body = `<div class="msg-bubble chat-md">${marked.parse(content)}</div>
               <div class="msg-actions">
                 <button class="msg-copy-btn" title="Copy response">
@@ -1210,65 +1134,51 @@ marked.setOptions({ breaks: true, gfm: true, renderer });
               </div>
               <div class="msg-time">${now}</div>`;
     } else {
-      body = `<div class="msg-bubble">${escapeHtml(content)}</div>
-              <div class="msg-time">${now}</div>`;
+      body = `<div class="msg-bubble">${escapeHtml(content)}</div><div class="msg-time">${now}</div>`;
     }
     div.innerHTML = `<div class="msg-avatar">${initials}</div><div class="msg-body">${body}</div>`;
 
-    // Wire up copy button
-    if (role === "assistant") {
-      const btn = div.querySelector(".msg-copy-btn");
-      btn.addEventListener("click", () => {
-        navigator.clipboard.writeText(content).then(() => {
-          btn.classList.add("copied");
-          btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <polyline points="20 6 9 17 4 12"/>
-          </svg>Copied!`;
-          setTimeout(() => {
-            btn.classList.remove("copied");
-            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-            </svg>Copy`;
+    if (role === 'assistant') {
+      const btn = div.querySelector('.msg-copy-btn');
+      btn.addEventListener('click', function() {
+        navigator.clipboard.writeText(content).then(function() {
+          btn.classList.add('copied');
+          btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Copied!`;
+          setTimeout(function() {
+            btn.classList.remove('copied');
+            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy`;
           }, 2000);
-        }).catch(() => {
-          // Fallback for browsers that block clipboard without HTTPS
-          const ta = document.createElement("textarea");
-          ta.value = content;
-          ta.style.position = "fixed"; ta.style.opacity = "0";
-          document.body.appendChild(ta);
-          ta.select(); document.execCommand("copy");
-          document.body.removeChild(ta);
-          btn.classList.add("copied");
-          btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <polyline points="20 6 9 17 4 12"/>
-          </svg>Copied!`;
-          setTimeout(() => {
-            btn.classList.remove("copied");
-            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-            </svg>Copy`;
+        }).catch(function() {
+          const ta = document.createElement('textarea');
+          ta.value = content; ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+          btn.classList.add('copied');
+          btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Copied!`;
+          setTimeout(function() {
+            btn.classList.remove('copied');
+            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy`;
           }, 2000);
         });
       });
     }
 
     msgs.appendChild(div);
+
+    // KEY FIX: hydrate iframes AFTER the element is in the DOM
+    if (role === 'assistant') hydrateIframes(div);
+
     msgs.scrollTop = msgs.scrollHeight;
   }
 
-  /* Error bubble — shows red styling + Retry button */
   function appendErrorBubble(errorText, retryContext) {
-    const msgs = document.getElementById("messages");
-    const now  = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const id   = "err-" + Date.now();
-    const div  = document.createElement("div");
-    div.className = "msg assistant";
+    const msgs = document.getElementById('messages');
+    const now  = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const id   = 'err-' + Date.now();
+    const div  = document.createElement('div');
+    div.className = 'msg assistant';
     div.dataset.errorId = id;
-    // Store retry context on the element so retryError() can read it
-    div.dataset.retryMsg        = retryContext.message        || "";
-    div.dataset.retryHistoryLen = retryContext.historyLen     || 0;
+    div.dataset.retryMsg = retryContext.message || '';
+    div.dataset.retryHistoryLen = retryContext.historyLen || 0;
     div.innerHTML = `
       <div class="msg-avatar"><img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD" style="width:100%;height:100%;object-fit:contain;border-radius:8px;"></div>
       <div class="msg-body">
@@ -1290,25 +1200,23 @@ marked.setOptions({ breaks: true, gfm: true, renderer });
   }
 
   function escapeHtml(s) {
-    return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
   /* ======================================================================
      TYPING INDICATOR
      ====================================================================== */
   function addTyping() {
-    const id   = "typing-" + Date.now();
-    const msgs = document.getElementById("messages");
-    const div  = document.createElement("div");
-    div.id = id; div.className = "msg assistant";
+    const id = 'typing-' + Date.now();
+    const msgs = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.id = id; div.className = 'msg assistant';
     div.innerHTML = `
       <div class="msg-avatar"><img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD" style="width:100%;height:100%;object-fit:contain;border-radius:8px;"></div>
       <div class="msg-body">
         <div class="msg-bubble">
           <div class="typing-indicator">
-            <div class="typing-dot"></div>
-            <div class="typing-dot"></div>
-            <div class="typing-dot"></div>
+            <div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>
           </div>
         </div>
       </div>`;
@@ -1323,8 +1231,8 @@ marked.setOptions({ breaks: true, gfm: true, renderer });
      ====================================================================== */
   function setBusy(state) {
     busy = state;
-    document.getElementById("send-btn").disabled  = state;
-    document.getElementById("chat-input").disabled = state;
+    document.getElementById('send-btn').disabled   = state;
+    document.getElementById('chat-input').disabled = state;
   }
 
   /* ======================================================================
@@ -1332,266 +1240,212 @@ marked.setOptions({ breaks: true, gfm: true, renderer });
      ====================================================================== */
   function openExportPanel(preselectedFormat) {
     panelOpen = true;
-    document.getElementById("export-panel").classList.add("open");
-    document.getElementById("body-wrap").classList.add("panel-open");
-
-    // Reset panel to empty/config state
-    showPanelState("empty");
+    document.getElementById('export-panel').classList.add('open');
+    document.getElementById('body-wrap').classList.add('panel-open');
+    showPanelState('empty');
     hideFooter();
     previewContent = null;
-
-    // Pre-fill format if detected
-    if (preselectedFormat) {
-      document.getElementById("ep-format").value = preselectedFormat;
-    }
-
-    // Auto-trigger preview generation so download button appears immediately
-    setTimeout(() => generatePreview(), 300);
-  }
-
+    if (preselectedFormat) document.getElementById('ep-format').value = preselectedFormat;
+    document.getElementById('ep-dl-pdf').style.display   = 'none';
+    document.getElementById('ep-dl-pptx').style.display  = 'none';
+    document.getElementById('ep-dl-csv').style.display   = 'none';
+    document.getElementById('ep-progress-fill').style.width = '0%';
+    document.getElementById('ep-steps').innerHTML = '';
+}
   function closeExportPanel() {
     panelOpen = false;
-    document.getElementById("export-panel").classList.remove("open");
-    document.getElementById("body-wrap").classList.remove("panel-open");
+    document.getElementById('export-panel').classList.remove('open');
+    document.getElementById('body-wrap').classList.remove('panel-open');
   }
 
-  /* ======================================================================
-     PANEL STATE HELPERS
-     ====================================================================== */
   function showPanelState(state) {
-    document.getElementById("ep-empty").style.display   = state === "empty"   ? "flex"  : "none";
-    document.getElementById("ep-loading").classList.toggle("visible", state === "loading");
-    document.getElementById("ep-preview").classList.toggle("visible", state === "preview");
-    document.getElementById("ep-progress-wrap").classList.toggle("visible", state === "loading");
+    document.getElementById('ep-empty').style.display   = state === 'empty'   ? 'flex' : 'none';
+    document.getElementById('ep-loading').classList.toggle('visible', state === 'loading');
+    document.getElementById('ep-preview').classList.toggle('visible', state === 'preview');
+    document.getElementById('ep-progress-wrap').classList.toggle('visible', state === 'loading');
   }
-
-  function hideFooter()  { document.getElementById("ep-footer").classList.add("hidden"); }
-function showFooter()  { 
-    document.getElementById("ep-footer").classList.remove("hidden");
-    // Ensure at least one download button is visible
-    const fmt = document.getElementById("ep-format").value;
-    if (fmt === "pdf") {
-        document.getElementById("ep-dl-pdf").style.display  = "flex";
-        document.getElementById("ep-dl-pptx").style.display = "none";
-    } else if (fmt === "pptx") {
-        document.getElementById("ep-dl-pdf").style.display  = "none";
-        document.getElementById("ep-dl-pptx").style.display = "flex";
-    }
-}
+  function hideFooter() { document.getElementById('ep-footer').classList.add('hidden'); }
+  function showFooter() { document.getElementById('ep-footer').classList.remove('hidden'); }
 
   /* ======================================================================
      GENERATE PREVIEW
      ====================================================================== */
-  async function generatePreview() {
-    if (exportBusy) return;
-    if (history.length === 0) {
-      showToast("Start a conversation first before exporting.", "error");
-      return;
+async function generatePreview() {
+  if (exportBusy) return;
+  if (history.length === 0) { showToast('Start a conversation first before exporting.', 'error'); return; }
+  const title  = document.getElementById('ep-title').value.trim() || 'Pipeline Intelligence Report';
+  const format = document.getElementById('ep-format').value;
+  const detail = document.getElementById('ep-detail').value;
+
+  if (format === 'csv') {
+    if (!datasetRows || datasetRows === 0) { showToast('No dataset found. Run a query first, then export.', 'error'); return; }
+    showPanelState('preview');
+    document.getElementById('ep-preview-content').innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:12px;padding:4px 0;">
+        <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:#E8F5E9;border:1px solid #C8E6C9;border-radius:8px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.5" style="width:20px;height:20px;flex-shrink:0;"><polyline points="20 6 9 17 4 12"/></svg>
+          <span style="color:#1B5E20;font-weight:600;font-size:14px;">${datasetRows.toLocaleString()} rows ready to export</span>
+        </div>
+        <p style="color:#555;font-size:13px;line-height:1.6;margin:0;">The CSV will contain the raw data with the original column headers from the database — no AI summary or formatting added.</p>
+      </div>`;
+    document.getElementById('ep-preview-meta-text').textContent = `${datasetRows.toLocaleString()} rows · Raw data · No AI summary`;
+    document.getElementById('ep-dl-pdf').style.display  = 'none';
+    document.getElementById('ep-dl-pptx').style.display = 'none';
+    const csvBtn = document.getElementById('ep-dl-csv');
+    if (csvBtn) {
+      csvBtn.style.display = 'flex';
+      const csvLabel = document.getElementById('ep-csv-label');
+      if (csvLabel) csvLabel.textContent = `Download All ${datasetRows.toLocaleString()} Rows (CSV)`;
     }
-
-    const title  = document.getElementById("ep-title").value.trim() || "Pipeline Intelligence Report";
-    const format = document.getElementById("ep-format").value;
-    const detail = document.getElementById("ep-detail").value;
-
-    // ── CSV: skip AI entirely — just confirm row count and show download button ──
-    if (format === "csv") {
-      if (!datasetRows || datasetRows === 0) {
-        showToast("No dataset found. Run a query first, then export.", "error");
-        return;
-      }
-      showPanelState("preview");
-      document.getElementById("ep-preview-content").innerHTML = `
-        <div style="display:flex;flex-direction:column;gap:12px;padding:4px 0;">
-          <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:#E8F5E9;border:1px solid #C8E6C9;border-radius:8px;">
-            <svg viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.5" style="width:20px;height:20px;flex-shrink:0;">
-              <polyline points="20 6 9 17 4 12"/>
-            </svg>
-            <span style="color:#1B5E20;font-weight:600;font-size:14px;">
-              ${datasetRows.toLocaleString()} rows ready to export
-            </span>
-          </div>
-          <p style="color:#555;font-size:13px;line-height:1.6;margin:0;">
-            The CSV will contain the raw data with the original column headers from the database — no AI summary or formatting added.
-          </p>
-        </div>`;
-      document.getElementById("ep-preview-meta-text").textContent =
-        `${datasetRows.toLocaleString()} rows · Raw data · No AI summary`;
-      // Show only the CSV download button
-      document.getElementById("ep-dl-pdf").style.display  = "none";
-      document.getElementById("ep-dl-pptx").style.display = "none";
-      const csvBtn = document.getElementById("ep-dl-csv");
-      if (csvBtn) {
-        csvBtn.style.display = "flex";
-        const csvLabel = document.getElementById("ep-csv-label");
-        if (csvLabel) csvLabel.textContent = `Download All ${datasetRows.toLocaleString()} Rows (CSV)`;
-      }
-      showFooter();
-      return;  // do NOT call /export/preview
-    }
-
-    // ── PDF / PPTX: full AI-generated preview ──
-    exportBusy = true;
-    document.getElementById("ep-generate-btn").disabled = true;
-    hideFooter();
-    showPanelState("loading");
-
-    // Animate loading steps
-    const steps = [
-      "Reading conversation context…",
-      "Extracting data & metrics…",
-      "Structuring document sections…",
-      "Formatting content…",
-    ];
-    const stepsEl = document.getElementById("ep-steps");
-    stepsEl.innerHTML = "";
-    setProgress(5, steps[0]);
-
-    for (let i = 0; i < steps.length; i++) {
-      await sleep(i === 0 ? 200 : 600);
-      const step = document.createElement("div");
-      step.className = "ep-loading-step";
-      step.innerHTML = `
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <polyline points="20 6 9 17 4 12"/>
-        </svg>${steps[i]}`;
-      stepsEl.appendChild(step);
-      setProgress(15 + i * 20, steps[Math.min(i + 1, steps.length - 1)]);
-    }
-
-    try {
-      setProgress(75, "AI generating document…");
-      const res = await fetch("/export/preview", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
-          conversation: history,
-          title,
-          export_type:  format,
-          detail_level: detail,
-          session_id:   SESSION_ID,
-        }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
-      previewContent = data.content;
-      if (data.total_rows > 0) datasetRows = data.total_rows;
-
-      setProgress(100, "Done!");
-      await sleep(400);
-
-      // Render preview
-      document.getElementById("ep-preview-content").innerHTML = marked.parse(previewContent);
-      const rowNote = data.total_rows > 0 ? ` · ${data.total_rows.toLocaleString()} rows` : "";
-      document.getElementById("ep-preview-meta-text").textContent =
-        `Preview ready${rowNote} · ${data.word_count} words · ${data.generated_at}`;
-      if (data.filters) {
-        const meta = document.getElementById("ep-preview-meta-text");
-        meta.textContent += ` · Filters: ${data.filters}`;
-      }
-
-      showPanelState("preview");
-      showFooter();
-
-      // Show correct download buttons (never show CSV here — CSV exits early above)
-      document.getElementById("ep-dl-pdf").style.display  = format === "pdf"  ? "flex" : "none";
-      document.getElementById("ep-dl-pptx").style.display = format === "pptx" ? "flex" : "none";
-      const csvBtn = document.getElementById("ep-dl-csv");
-      if (csvBtn) csvBtn.style.display = "none";
-
-    } catch (err) {
-      showPanelState("empty");
-      showToast("Preview generation failed: " + err.message, "error");
-      appendBubble("assistant", `⚠️ **Export preview failed:** ${err.message}`);
-    } finally {
-      exportBusy = false;
-      document.getElementById("ep-generate-btn").disabled = false;
-    }
+    showFooter();
+    return;
   }
 
-  // Hide Detail Level when CSV is selected; reset panel on any format switch
-  document.getElementById("ep-format").addEventListener("change", function () {
-    const isCsv = this.value === "csv";
-    document.getElementById("ep-detail-group").style.display = isCsv ? "none" : "";
+  exportBusy = true;
+  document.getElementById('ep-generate-btn').disabled = true;
+  hideFooter();
+  showPanelState('loading');
+  const steps = ['Reading conversation context…','Extracting data & metrics…','Structuring document sections…','Formatting content…'];
+  const stepsEl = document.getElementById('ep-steps');
+  stepsEl.innerHTML = '';
+  setProgress(5, steps[0]);
+  for (let i = 0; i < steps.length; i++) {
+    await sleep(i === 0 ? 200 : 600);
+    const step = document.createElement('div');
+    step.className = 'ep-loading-step';
+    step.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>${steps[i]}`;
+    stepsEl.appendChild(step);
+    setProgress(15 + i * 20, steps[Math.min(i + 1, steps.length - 1)]);
+  }
+  try {
+    setProgress(75, 'AI generating document…');
+    const res = await fetch('/export/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversation: history,
+        title,
+        export_type: format,
+        detail_level: detail,
+        session_id: SESSION_ID
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    previewContent = data.content;
+    if (data.total_rows > 0) datasetRows = data.total_rows;
+    setProgress(100, 'Done!');
+    await sleep(400);
 
-    // Always reset the panel when format changes — stale preview/buttons from the
-    // previous format are wrong for the newly selected format
-    showPanelState("empty");
+    // Render preview
+    document.getElementById('ep-preview-content').innerHTML = marked.parse(previewContent);
+    const rowNote = data.total_rows > 0 ? ` · ${data.total_rows.toLocaleString()} rows` : '';
+    let metaText = `Preview ready${rowNote} · ${data.word_count} words · ${data.generated_at}`;
+    if (data.filters) metaText += ` · Filters: ${data.filters}`;
+    document.getElementById('ep-preview-meta-text').textContent = metaText;
+
+    showPanelState('preview');
+
+    // Show correct download button
+    document.getElementById('ep-dl-pdf').style.display  = format === 'pdf'  ? 'flex' : 'none';
+    document.getElementById('ep-dl-pptx').style.display = format === 'pptx' ? 'flex' : 'none';
+    const csvBtn2 = document.getElementById('ep-dl-csv');
+    if (csvBtn2) csvBtn2.style.display = 'none';
+
+    showFooter();
+
+  } catch(err) {
+    showPanelState('empty');
+    showToast('Preview generation failed: ' + err.message, 'error');
+    appendBubble('assistant', `⚠️ **Export preview failed:** ${err.message}`);
+  } finally {
+    exportBusy = false;
+    document.getElementById('ep-generate-btn').disabled = false;
+  }
+}
+
+  document.getElementById('ep-format').addEventListener('change', function() {
+    const isCsv = this.value === 'csv';
+    document.getElementById('ep-detail-group').style.display = isCsv ? 'none' : '';
+    showPanelState('empty');
     hideFooter();
     previewContent = null;
-
-    // Hide all download buttons so nothing leaks across format switches
-    document.getElementById("ep-dl-pdf").style.display  = "none";
-    document.getElementById("ep-dl-pptx").style.display = "none";
-    const csvBtn = document.getElementById("ep-dl-csv");
-    if (csvBtn) csvBtn.style.display = "none";
-  });
+    document.getElementById('ep-dl-pdf').style.display  = 'none';
+    document.getElementById('ep-dl-pptx').style.display = 'none';
+    const csvBtn = document.getElementById('ep-dl-csv');
+    if (csvBtn) csvBtn.style.display = 'none';
+    document.getElementById('ep-progress-fill').style.width = '0%';
+    document.getElementById('ep-steps').innerHTML = '';
+});
 
   function setProgress(pct, label) {
-    document.getElementById("ep-progress-fill").style.width = pct + "%";
-    document.getElementById("ep-progress-label").textContent = label;
+    document.getElementById('ep-progress-fill').style.width = pct + '%';
+    document.getElementById('ep-progress-label').textContent = label;
   }
 
   /* ======================================================================
-     DOWNLOAD — PDF, PPTX, or CSV (all session-aware)
+     DOWNLOAD
      ====================================================================== */
   async function downloadDoc(format) {
-    if (!previewContent) { showToast("Generate a preview first.", "error"); return; }
-    const title = document.getElementById("ep-title").value.trim() || "Pipeline Intelligence Report";
-    const dlBtn = document.getElementById(format === "pdf" ? "ep-dl-pdf" : "ep-dl-pptx");
+    if (!previewContent) { showToast('Generate a preview first.', 'error'); return; }
+    const title = document.getElementById('ep-title').value.trim() || 'Pipeline Intelligence Report';
+    const dlBtn = document.getElementById(format === 'pdf' ? 'ep-dl-pdf' : 'ep-dl-pptx');
     dlBtn.disabled = true;
     const orig = dlBtn.innerHTML;
     dlBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:15px;height:15px;"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>Building…`;
-    showToast(`Building ${format.toUpperCase()}…`, "");
+    showToast(`Building ${format.toUpperCase()}…`, '');
     try {
-      const res = await fetch("/export/download", {
-        method: "POST", headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({format, content: previewContent, title, session_id: SESSION_ID}),
+      const res = await fetch('/export/download', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format, content: previewContent, title, session_id: SESSION_ID }),
       });
       if (!res.ok) throw new Error((await res.json().catch(()=>({}))).detail || `HTTP ${res.status}`);
-      const a = document.createElement("a");
+      const a = document.createElement('a');
       a.href = URL.createObjectURL(await res.blob());
-      a.download = `${title.replace(/\s+/g,"_")}.${format}`;
+      a.download = `${title.replace(/\s+/g,'_')}.${format}`;
       a.click(); URL.revokeObjectURL(a.href);
-      showToast(`✅ ${format.toUpperCase()} downloaded!`, "success");
-    } catch (err) { showToast("Download failed: " + err.message, "error"); }
-    finally { dlBtn.innerHTML = orig; dlBtn.disabled = false; }
+      showToast(`✅ ${format.toUpperCase()} downloaded!`, 'success');
+    } catch(err) {
+      showToast('Download failed: ' + err.message, 'error');
+    } finally {
+      dlBtn.innerHTML = orig; dlBtn.disabled = false;
+    }
   }
 
   async function downloadCSV() {
-    const title  = document.getElementById("ep-title").value.trim() || "deals-export";
-    const csvBtn = document.getElementById("ep-dl-csv");
-    const orig   = csvBtn ? csvBtn.innerHTML : "";
+    const title  = document.getElementById('ep-title').value.trim() || 'deals-export';
+    const csvBtn = document.getElementById('ep-dl-csv');
+    const orig   = csvBtn ? csvBtn.innerHTML : '';
     if (csvBtn) csvBtn.disabled = true;
-    showToast(`Exporting ${datasetRows > 0 ? datasetRows.toLocaleString()+" rows" : "data"} as CSV…`, "");
+    showToast(`Exporting ${datasetRows > 0 ? datasetRows.toLocaleString() + ' rows' : 'data'} as CSV…`, '');
     try {
-      const res = await fetch("/export/download", {
-        method: "POST", headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({format:"csv", title, session_id: SESSION_ID,  model: selectedModel,}),
+      const res = await fetch('/export/download', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format: 'csv', title, session_id: SESSION_ID }),
       });
       if (!res.ok) throw new Error((await res.json().catch(()=>({}))).detail || `HTTP ${res.status}`);
-      const totalRows = res.headers.get("X-Total-Rows") || datasetRows;
-      const a = document.createElement("a");
+      const totalRows = res.headers.get('X-Total-Rows') || datasetRows;
+      const a = document.createElement('a');
       a.href = URL.createObjectURL(await res.blob());
-      a.download = `${title.replace(/\s+/g,"_")}.csv`;
+      a.download = `${title.replace(/\s+/g,'_')}.csv`;
       a.click(); URL.revokeObjectURL(a.href);
-      showToast(`✅ CSV exported — all ${Number(totalRows).toLocaleString()} rows!`, "success");
-    } catch (err) { showToast("CSV export failed: " + err.message, "error"); }
-    finally { if (csvBtn) { csvBtn.innerHTML = orig; csvBtn.disabled = false; } }
+      showToast(`✅ CSV exported — all ${Number(totalRows).toLocaleString()} rows!`, 'success');
+    } catch(err) {
+      showToast('CSV export failed: ' + err.message, 'error');
+    } finally {
+      if (csvBtn) { csvBtn.innerHTML = orig; csvBtn.disabled = false; }
+    }
   }
 
   /* ======================================================================
      NEW CHAT
      ====================================================================== */
   function newChat() {
-    history = [];
-    previewContent = null;
-    datasetRows    = 0;
-    const msgs = document.getElementById("messages");
+    history = []; previewContent = null; datasetRows = 0;
+    const msgs = document.getElementById('messages');
     msgs.innerHTML = `
       <div id="welcome">
         <div class="welcome-icon">
@@ -1606,45 +1460,43 @@ function showFooter()  {
       </div>`;
     updateDatasetBadge();
     if (panelOpen) closeExportPanel();
-  }
+    input.value = '';
+    input.style.height = 'auto';
+}
 
   /* ======================================================================
      TOAST
      ====================================================================== */
   let _toastTimer;
-  function showToast(msg, type = "") {
-    const t = document.getElementById("toast");
-    t.textContent = msg;
-    t.className   = "show " + type;
+  function showToast(msg, type) {
+    type = type || '';
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.className = 'show ' + type;
     clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(() => { t.className = ""; }, 4000);
+    _toastTimer = setTimeout(function() { t.className = ''; }, 4000);
   }
 
   /* ======================================================================
      CONNECTION HEALTH CHECK
      ====================================================================== */
   async function checkConn() {
-    const badge = document.getElementById("conn-badge");
-    const label = document.getElementById("conn-label");
-    badge.className = "conn-badge checking";
-    label.textContent = "Checking…";
+    const badge = document.getElementById('conn-badge');
+    const label = document.getElementById('conn-label');
+    badge.className = 'conn-badge checking';
+    label.textContent = 'Checking…';
     try {
-      const res  = await fetch("/debug/db");
+      const res  = await fetch('/debug/db');
       const data = await res.json();
-      if (data.status === "OK") {
-        badge.className  = "conn-badge ok";
-        label.textContent = "DB Connected ✓";
+      if (data.status === 'OK') {
+        badge.className = 'conn-badge ok'; label.textContent = 'DB Connected ✓';
       } else {
-        badge.className  = "conn-badge fail";
-        label.textContent = "DB Unreachable";
+        badge.className = 'conn-badge fail'; label.textContent = 'DB Unreachable';
       }
     } catch {
-      badge.className  = "conn-badge fail";
-      label.textContent = "DB Unreachable";
+      badge.className = 'conn-badge fail'; label.textContent = 'DB Unreachable';
     }
   }
 
-  /* Run connection check on load */
   checkConn();
 </script>
 </body>
