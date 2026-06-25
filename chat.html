@@ -310,7 +310,7 @@
       overflow: hidden;
       box-shadow: 0 4px 24px rgba(13,27,62,.13);
       border: 1px solid rgba(13,27,62,.08);
-      background: #0D1B3E; /* dark fallback while loading */
+      background: #0D1B3E;
       position: relative;
     }
     .inline-visual-wrap iframe {
@@ -322,7 +322,6 @@
       transition: height .3s ease;
       background: transparent;
     }
-    /* Small label badge */
     .inline-visual-badge {
       position: absolute;
       top: 8px; right: 10px;
@@ -421,9 +420,7 @@
     #toast.success { background: var(--green); }
     #toast.error   { background: var(--red); }
 
-    /* ================================================================
-       EXPORT SIDE PANEL
-       ================================================================ */
+    /* ── Export Side Panel ───────────────────────────────────────────────── */
     .export-panel {
       width: 0; min-width: 0;
       background: var(--white);
@@ -694,17 +691,11 @@
           </div>
           <div class="model-dropdown" id="model-dropdown">
             <div class="model-option active" id="opt-sonnet" onclick="selectModel('sonnet')">
-              <div class="model-option-name">
-                ...
-                claude-sonnet-4-6
-              </div>
+              <div class="model-option-name">claude-sonnet-4-6</div>
               <div class="model-option-desc">Fast · Best for most queries</div>
             </div>
             <div class="model-option" id="opt-opus" onclick="selectModel('opus')">
-              <div class="model-option-name" style="color:#7C3AED;">
-                ...
-                claude-opus-4-6
-              </div>
+              <div class="model-option-name" style="color:#7C3AED;">claude-opus-4-6</div>
               <div class="model-option-desc">More powerful · Complex analysis</div>
             </div>
           </div>
@@ -817,14 +808,14 @@
         </svg>
         Regenerate
       </button>
-      <button class="ep-download-btn btn-pdf-dl" id="ep-dl-pdf" onclick="downloadDoc('pdf')">
+      <button class="ep-download-btn btn-pdf-dl" id="ep-dl-pdf" onclick="downloadDoc('pdf')" style="display:none;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
           <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
         </svg>
         Download PDF
       </button>
-      <button class="ep-download-btn btn-pptx-dl" id="ep-dl-pptx" onclick="downloadDoc('pptx')">
+      <button class="ep-download-btn btn-pptx-dl" id="ep-dl-pptx" onclick="downloadDoc('pptx')" style="display:none;">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
           <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
@@ -858,14 +849,12 @@
   let selectedModel  = "sonnet";
 
   /* ======================================================================
-     MARKED CONFIG — sandboxed iframe for HTML blocks
+     MARKED CONFIG
      ====================================================================== */
   const renderer = new marked.Renderer();
 
-  // Override fenced code blocks: html → sandboxed iframe, others → styled <pre>
   renderer.code = function(code, lang) {
     if (lang === 'html') {
-      // Inject font + reset into the srcdoc so the chart looks self-contained
       const doc = `<!DOCTYPE html><html><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -876,18 +865,15 @@
 </style>
 </head><body>${code}
 <script>
-  // Auto-resize: tell parent the real height after render
   function notifyHeight(){
     var h=document.body.scrollHeight||document.documentElement.scrollHeight;
     parent.postMessage({type:'diud-iframe-height',height:h},'*');
   }
-  // Fire on load + after short delay for any dynamic content
   window.addEventListener('load',function(){notifyHeight();setTimeout(notifyHeight,300);setTimeout(notifyHeight,800);});
   new MutationObserver(notifyHeight).observe(document.body,{childList:true,subtree:true,attributes:true});
 <\/script>
 </body></html>`;
       const id = 'iv-' + Math.random().toString(36).slice(2,9);
-      // srcdoc is set via JS to avoid HTML escaping issues with backticks etc.
       return `<div class="inline-visual-wrap" id="wrap-${id}">
   <span class="inline-visual-badge">VISUAL</span>
   <iframe id="${id}" sandbox="allow-scripts" scrolling="no"
@@ -895,7 +881,6 @@
     data-srcdoc="${encodeURIComponent(doc)}"></iframe>
 </div>`;
     }
-    // Regular code block
     const escaped = code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     const cls = lang ? ` class="language-${lang}"` : '';
     return `<pre><code${cls}>${escaped}</code></pre>`;
@@ -905,12 +890,9 @@
 
   /* ======================================================================
      IFRAME HEIGHT LISTENER
-     After marked injects iframe markup into the DOM, we set srcdoc and
-     listen for postMessage to auto-size the iframe to its real content.
      ====================================================================== */
   window.addEventListener('message', function(e) {
     if (!e.data || e.data.type !== 'diud-iframe-height') return;
-    // Find the iframe that sent this message
     const iframes = document.querySelectorAll('.inline-visual-wrap iframe');
     iframes.forEach(function(f) {
       try {
@@ -922,7 +904,6 @@
     });
   });
 
-  // Called after appendBubble inserts HTML — hydrate deferred iframes
   function hydrateIframes(container) {
     container.querySelectorAll('iframe[data-srcdoc]').forEach(function(f) {
       if (f.dataset.srcdocLoaded) return;
@@ -938,28 +919,32 @@
   function toggleModelDropdown() {
     document.getElementById('model-dropdown').classList.toggle('open');
   }
+
   function selectModel(m) {
     selectedModel = m;
     const pill  = document.getElementById('model-pill');
     const label = document.getElementById('model-pill-label');
     const optS  = document.getElementById('opt-sonnet');
     const optO  = document.getElementById('opt-opus');
-    const chkS  = optS.querySelector('svg');
-    const chkO  = optO.querySelector('svg');
     if (m === 'opus') {
-      label.textContent = 'Opus'; pill.classList.add('opus');
-      optO.classList.add('active'); optS.classList.remove('active');
-      chkO.style.opacity = '1'; chkS.style.opacity = '0';
+      label.textContent = 'Opus';
+      pill.classList.add('opus');
+      optO.classList.add('active');
+      optS.classList.remove('active');
     } else {
-      label.textContent = 'Sonnet'; pill.classList.remove('opus');
-      optS.classList.add('active'); optO.classList.remove('active');
-      chkS.style.opacity = '1'; chkO.style.opacity = '0';
+      label.textContent = 'Sonnet';
+      pill.classList.remove('opus');
+      optS.classList.add('active');
+      optO.classList.remove('active');
     }
     document.getElementById('model-dropdown').classList.remove('open');
   }
+
   document.addEventListener('click', function(e) {
-    if (!e.target.closest('#model-pill') && !e.target.closest('#model-dropdown'))
-      document.getElementById('model-dropdown')?.classList.remove('open');
+    if (!e.target.closest('#model-pill') && !e.target.closest('#model-dropdown')) {
+      var dd = document.getElementById('model-dropdown');
+      if (dd) dd.classList.remove('open');
+    }
   });
 
   /* ======================================================================
@@ -975,11 +960,12 @@
   /* ======================================================================
      LOGIN
      ====================================================================== */
-  const VALID_USERS = { "diud": "DiuD@2026" };
+  var VALID_USERS = { "diud": "DiuD@2026" };
+
   function doLogin() {
-    const user = document.getElementById('login-user').value.trim();
-    const pass = document.getElementById('login-pass').value;
-    const err  = document.getElementById('login-error');
+    var user = document.getElementById('login-user').value.trim();
+    var pass = document.getElementById('login-pass').value;
+    var err  = document.getElementById('login-error');
     if (!user || !pass) { err.textContent = 'Please enter username and password.'; return; }
     if (VALID_USERS[user.toLowerCase()] === pass) {
       document.getElementById('login-overlay').style.display = 'none';
@@ -990,6 +976,7 @@
       document.getElementById('login-pass').focus();
     }
   }
+
   document.getElementById('login-user').addEventListener('keydown', function(e) {
     if (e.key === 'Enter') document.getElementById('login-pass').focus();
   });
@@ -997,11 +984,12 @@
   /* ======================================================================
      AUTO-RESIZE TEXTAREA
      ====================================================================== */
-  const input = document.getElementById('chat-input');
+  var input = document.getElementById('chat-input');
   input.addEventListener('input', function() {
     this.style.height = 'auto';
     this.style.height = Math.min(this.scrollHeight, 140) + 'px';
   });
+
   function handleKey(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   }
@@ -1010,31 +998,31 @@
      SEND MESSAGE
      ====================================================================== */
   async function send() {
-    const text = input.value.trim();
+    var text = input.value.trim();
     if (!text || busy) return;
-    const welcome = document.getElementById('welcome');
+    var welcome = document.getElementById('welcome');
     if (welcome) welcome.remove();
     appendBubble('user', text);
     history.push({ role: 'user', content: text });
     input.value = '';
     input.style.height = 'auto';
     setBusy(true);
-    const typingId = addTyping();
+    var typingId = addTyping();
     try {
-      const res = await fetch('/chat', {
+      var res = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, history: history.slice(0, -1), session_id: SESSION_ID, model: selectedModel }),
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+        var errJson = await res.json().catch(function() { return {}; });
+        throw new Error(errJson.detail || ('HTTP ' + res.status));
       }
-      const data = await res.json();
+      var data = await res.json();
       removeTyping(typingId);
       if (data.dataset_rows > 0) { datasetRows = data.dataset_rows; updateDatasetBadge(); }
       if (data.export_intent) {
-        const visibleReply = data.reply.replace('__EXPORT_INTENT__', '').trim();
+        var visibleReply = data.reply.replace('__EXPORT_INTENT__', '').trim();
         appendBubble('assistant', visibleReply);
         history.push({ role: 'assistant', content: visibleReply });
         openExportPanel(detectExportFormat(text));
@@ -1052,36 +1040,37 @@
   }
 
   function sendSuggestion(text) { input.value = text; send(); }
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+  function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
   /* ======================================================================
      RETRY
      ====================================================================== */
   async function retryError(errorId) {
     if (busy) return;
-    const errEl   = document.querySelector(`[data-error-id="${errorId}"]`);
-    const btn     = document.getElementById(`retrybtn-${errorId}`);
-    const origMsg = errEl ? errEl.dataset.retryMsg : '';
+    var errEl   = document.querySelector('[data-error-id="' + errorId + '"]');
+    var btn     = document.getElementById('retrybtn-' + errorId);
+    var origMsg = errEl ? errEl.dataset.retryMsg : '';
     if (!origMsg) { showToast('Nothing to retry.', 'error'); return; }
     if (btn) {
-      btn.disabled = true; btn.classList.add('retrying');
-      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Retrying…`;
+      btn.disabled = true;
+      btn.classList.add('retrying');
+      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Retrying…';
     }
     setBusy(true);
     try {
-      const res = await fetch('/chat', {
+      var res = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: origMsg, history: history, session_id: SESSION_ID, model: selectedModel }),
       });
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || `HTTP ${res.status}`);
+        var errData = await res.json().catch(function() { return {}; });
+        throw new Error(errData.detail || ('HTTP ' + res.status));
       }
-      const data = await res.json();
+      var data = await res.json();
       if (data.dataset_rows > 0) { datasetRows = data.dataset_rows; updateDatasetBadge(); }
       if (errEl) errEl.remove();
-      const reply = data.export_intent ? data.reply.replace('__EXPORT_INTENT__', '').trim() : data.reply;
+      var reply = data.export_intent ? data.reply.replace('__EXPORT_INTENT__', '').trim() : data.reply;
       appendBubble('user', origMsg);
       history.push({ role: 'user', content: origMsg });
       appendBubble('assistant', reply);
@@ -1090,8 +1079,9 @@
       showToast('✅ Retry succeeded', 'success');
     } catch(err) {
       if (btn) {
-        btn.disabled = false; btn.classList.remove('retrying');
-        btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Retry`;
+        btn.disabled = false;
+        btn.classList.remove('retrying');
+        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Retry';
       }
       showToast('Retry failed: ' + err.message, 'error');
     } finally {
@@ -1100,10 +1090,10 @@
   }
 
   function updateDatasetBadge() {
-    const badge = document.getElementById('ep-dataset-badge');
+    var badge = document.getElementById('ep-dataset-badge');
     if (!badge) return;
     if (datasetRows > 0) {
-      badge.textContent = `📊 ${datasetRows.toLocaleString()} rows ready to export`;
+      badge.textContent = '📊 ' + datasetRows.toLocaleString() + ' rows ready to export';
       badge.style.display = 'flex';
     } else {
       badge.style.display = 'none';
@@ -1114,117 +1104,108 @@
      BUBBLE HELPERS
      ====================================================================== */
   function appendBubble(role, content) {
-    const msgs = document.getElementById('messages');
-    const now  = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const div  = document.createElement('div');
-    div.className = `msg ${role}`;
-    const diudAvatar = `<img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD" style="width:100%;height:100%;object-fit:contain;border-radius:8px;">`;
-    const initials = role === 'user' ? 'YOU' : diudAvatar;
-    let body;
+    var msgs = document.getElementById('messages');
+    var now  = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    var div  = document.createElement('div');
+    div.className = 'msg ' + role;
+    var diudAvatar = '<img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD" style="width:100%;height:100%;object-fit:contain;border-radius:8px;">';
+    var initials = role === 'user' ? 'YOU' : diudAvatar;
+    var body;
     if (role === 'assistant') {
-      body = `<div class="msg-bubble chat-md">${marked.parse(content)}</div>
-              <div class="msg-actions">
-                <button class="msg-copy-btn" title="Copy response">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                  </svg>
-                  Copy
-                </button>
-              </div>
-              <div class="msg-time">${now}</div>`;
+      body = '<div class="msg-bubble chat-md">' + marked.parse(content) + '</div>' +
+             '<div class="msg-actions">' +
+               '<button class="msg-copy-btn" title="Copy response">' +
+                 '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>' +
+                 'Copy' +
+               '</button>' +
+             '</div>' +
+             '<div class="msg-time">' + now + '</div>';
     } else {
-      body = `<div class="msg-bubble">${escapeHtml(content)}</div><div class="msg-time">${now}</div>`;
+      body = '<div class="msg-bubble">' + escapeHtml(content) + '</div><div class="msg-time">' + now + '</div>';
     }
-    div.innerHTML = `<div class="msg-avatar">${initials}</div><div class="msg-body">${body}</div>`;
+    div.innerHTML = '<div class="msg-avatar">' + initials + '</div><div class="msg-body">' + body + '</div>';
 
     if (role === 'assistant') {
-      const btn = div.querySelector('.msg-copy-btn');
+      var btn = div.querySelector('.msg-copy-btn');
       btn.addEventListener('click', function() {
         navigator.clipboard.writeText(content).then(function() {
           btn.classList.add('copied');
-          btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Copied!`;
+          btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Copied!';
           setTimeout(function() {
             btn.classList.remove('copied');
-            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy`;
+            btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy';
           }, 2000);
         }).catch(function() {
-          const ta = document.createElement('textarea');
+          var ta = document.createElement('textarea');
           ta.value = content; ta.style.position = 'fixed'; ta.style.opacity = '0';
           document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
           btn.classList.add('copied');
-          btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Copied!`;
+          btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Copied!';
           setTimeout(function() {
             btn.classList.remove('copied');
-            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy`;
+            btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy';
           }, 2000);
         });
       });
     }
 
     msgs.appendChild(div);
-
-    // KEY FIX: hydrate iframes AFTER the element is in the DOM
     if (role === 'assistant') hydrateIframes(div);
-
     msgs.scrollTop = msgs.scrollHeight;
   }
 
   function appendErrorBubble(errorText, retryContext) {
-    const msgs = document.getElementById('messages');
-    const now  = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const id   = 'err-' + Date.now();
-    const div  = document.createElement('div');
+    var msgs = document.getElementById('messages');
+    var now  = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    var id   = 'err-' + Date.now();
+    var div  = document.createElement('div');
     div.className = 'msg assistant';
     div.dataset.errorId = id;
     div.dataset.retryMsg = retryContext.message || '';
     div.dataset.retryHistoryLen = retryContext.historyLen || 0;
-    div.innerHTML = `
-      <div class="msg-avatar"><img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD" style="width:100%;height:100%;object-fit:contain;border-radius:8px;"></div>
-      <div class="msg-body">
-        <div class="msg-error-wrap">
-          <div class="msg-error-bubble">⚠️ ${escapeHtml(errorText)}</div>
-          <button class="msg-retry-btn" id="retrybtn-${id}" onclick="retryError('${id}')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-            </svg>
-            Retry
-          </button>
-        </div>
-        <div class="msg-time">${now}</div>
-      </div>`;
+    div.innerHTML =
+      '<div class="msg-avatar"><img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD" style="width:100%;height:100%;object-fit:contain;border-radius:8px;"></div>' +
+      '<div class="msg-body">' +
+        '<div class="msg-error-wrap">' +
+          '<div class="msg-error-bubble">⚠️ ' + escapeHtml(errorText) + '</div>' +
+          '<button class="msg-retry-btn" id="retrybtn-' + id + '" onclick="retryError(\'' + id + '\')">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>' +
+            'Retry' +
+          '</button>' +
+        '</div>' +
+        '<div class="msg-time">' + now + '</div>' +
+      '</div>';
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
     return id;
   }
 
   function escapeHtml(s) {
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
   /* ======================================================================
      TYPING INDICATOR
      ====================================================================== */
   function addTyping() {
-    const id = 'typing-' + Date.now();
-    const msgs = document.getElementById('messages');
-    const div = document.createElement('div');
+    var id = 'typing-' + Date.now();
+    var msgs = document.getElementById('messages');
+    var div = document.createElement('div');
     div.id = id; div.className = 'msg assistant';
-    div.innerHTML = `
-      <div class="msg-avatar"><img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD" style="width:100%;height:100%;object-fit:contain;border-radius:8px;"></div>
-      <div class="msg-body">
-        <div class="msg-bubble">
-          <div class="typing-indicator">
-            <div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>
-          </div>
-        </div>
-      </div>`;
+    div.innerHTML =
+      '<div class="msg-avatar"><img src="https://raw.githubusercontent.com/tejaswinijandhyala-ui/DIUD/main/logo.png" alt="DIUD" style="width:100%;height:100%;object-fit:contain;border-radius:8px;"></div>' +
+      '<div class="msg-body"><div class="msg-bubble"><div class="typing-indicator">' +
+      '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>' +
+      '</div></div></div>';
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
     return id;
   }
-  function removeTyping(id) { const el = document.getElementById(id); if (el) el.remove(); }
+
+  function removeTyping(id) {
+    var el = document.getElementById(id);
+    if (el) el.remove();
+  }
 
   /* ======================================================================
      BUSY STATE
@@ -1241,7 +1222,6 @@
   function openExportPanel(preselectedFormat) {
     panelOpen = true;
     document.getElementById('export-panel').classList.add('open');
-    document.getElementById('body-wrap').classList.add('panel-open');
     showPanelState('empty');
     hideFooter();
     previewContent = null;
@@ -1251,192 +1231,211 @@
     document.getElementById('ep-dl-csv').style.display   = 'none';
     document.getElementById('ep-progress-fill').style.width = '0%';
     document.getElementById('ep-steps').innerHTML = '';
-}
+  }
+
   function closeExportPanel() {
     panelOpen = false;
     document.getElementById('export-panel').classList.remove('open');
-    document.getElementById('body-wrap').classList.remove('panel-open');
   }
 
   function showPanelState(state) {
-    document.getElementById('ep-empty').style.display   = state === 'empty'   ? 'flex' : 'none';
+    document.getElementById('ep-empty').style.display   = state === 'empty' ? 'flex' : 'none';
     document.getElementById('ep-loading').classList.toggle('visible', state === 'loading');
     document.getElementById('ep-preview').classList.toggle('visible', state === 'preview');
     document.getElementById('ep-progress-wrap').classList.toggle('visible', state === 'loading');
   }
+
   function hideFooter() { document.getElementById('ep-footer').classList.add('hidden'); }
   function showFooter() { document.getElementById('ep-footer').classList.remove('hidden'); }
 
   /* ======================================================================
-     GENERATE PREVIEW
+     PROGRESS HELPER  — defined at top level so all functions can call it
      ====================================================================== */
-async function generatePreview() {
-  if (exportBusy) return;
-  if (history.length === 0) { showToast('Start a conversation first before exporting.', 'error'); return; }
-  const title  = document.getElementById('ep-title').value.trim() || 'Pipeline Intelligence Report';
-  const format = document.getElementById('ep-format').value;
-  const detail = document.getElementById('ep-detail').value;
-
-  if (format === 'csv') {
-    if (!datasetRows || datasetRows === 0) { showToast('No dataset found. Run a query first, then export.', 'error'); return; }
-    showPanelState('preview');
-    document.getElementById('ep-preview-content').innerHTML = `
-      <div style="display:flex;flex-direction:column;gap:12px;padding:4px 0;">
-        <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:#E8F5E9;border:1px solid #C8E6C9;border-radius:8px;">
-          <svg viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.5" style="width:20px;height:20px;flex-shrink:0;"><polyline points="20 6 9 17 4 12"/></svg>
-          <span style="color:#1B5E20;font-weight:600;font-size:14px;">${datasetRows.toLocaleString()} rows ready to export</span>
-        </div>
-        <p style="color:#555;font-size:13px;line-height:1.6;margin:0;">The CSV will contain the raw data with the original column headers from the database — no AI summary or formatting added.</p>
-      </div>`;
-    document.getElementById('ep-preview-meta-text').textContent = `${datasetRows.toLocaleString()} rows · Raw data · No AI summary`;
-    document.getElementById('ep-dl-pdf').style.display  = 'none';
-    document.getElementById('ep-dl-pptx').style.display = 'none';
-    const csvBtn = document.getElementById('ep-dl-csv');
-    if (csvBtn) {
-      csvBtn.style.display = 'flex';
-      const csvLabel = document.getElementById('ep-csv-label');
-      if (csvLabel) csvLabel.textContent = `Download All ${datasetRows.toLocaleString()} Rows (CSV)`;
-    }
-    showFooter();
-    return;
-  }
-
-  exportBusy = true;
-  document.getElementById('ep-generate-btn').disabled = true;
-  hideFooter();
-  showPanelState('loading');
-  const steps = ['Reading conversation context…','Extracting data & metrics…','Structuring document sections…','Formatting content…'];
-  const stepsEl = document.getElementById('ep-steps');
-  stepsEl.innerHTML = '';
-  setProgress(5, steps[0]);
-  for (let i = 0; i < steps.length; i++) {
-    await sleep(i === 0 ? 200 : 600);
-    const step = document.createElement('div');
-    step.className = 'ep-loading-step';
-    step.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>${steps[i]}`;
-    stepsEl.appendChild(step);
-    setProgress(15 + i * 20, steps[Math.min(i + 1, steps.length - 1)]);
-  }
-  try {
-    const res = await fetch('/export/preview', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        conversation: history,
-        title,
-        export_type: format,
-        detail_level: detail,
-        session_id: SESSION_ID
-      }),
-    });
-    if (!res.ok) {
-      let errBody = {};
-      try { errBody = await res.json(); } catch(_) {}
-      const errMsg = errBody.detail || `HTTP ${res.status}`;
-      throw new Error(errMsg);
-    }
-    const data = await res.json();
-    previewContent = data.content;
-    if (data.total_rows > 0) datasetRows = data.total_rows;
-    setProgress(100, 'Done!');
-    await sleep(400);
-
-    // Render preview
-    document.getElementById('ep-preview-content').innerHTML = marked.parse(previewContent);
-    const rowNote = data.total_rows > 0 ? ` · ${data.total_rows.toLocaleString()} rows` : '';
-    let metaText = `Preview ready${rowNote} · ${data.word_count} words · ${data.generated_at}`;
-    if (data.filters) metaText += ` · Filters: ${data.filters}`;
-    document.getElementById('ep-preview-meta-text').textContent = metaText;
-
-    showPanelState('preview');
-
-    // Show correct download button
-    document.getElementById('ep-dl-pdf').style.display  = format === 'pdf'  ? 'flex' : 'none';
-    document.getElementById('ep-dl-pptx').style.display = format === 'pptx' ? 'flex' : 'none';
-    const csvBtn2 = document.getElementById('ep-dl-csv');
-    if (csvBtn2) csvBtn2.style.display = 'none';
-
-    showFooter();
-
-  } catch(err) {
-    showPanelState('empty');
-    const msg = err.message || 'Unknown error';
-    showToast('Export failed: ' + msg, 'error');
-    appendBubble('assistant',
-      `⚠️ **Export preview failed:** ${msg}\n\n` +
-      `**Tips:**\n` +
-      `- Try switching **Detail Level** to **Summary** instead of Entire Conversation\n` +
-      `- If the conversation is very long, click **New Chat**, run your key query again, then export\n` +
-      `- Try again in a few seconds if this was a timeout`
-    );
-  }
-
-  document.getElementById('ep-format').addEventListener('change', function() {
-    const isCsv = this.value === 'csv';
-    document.getElementById('ep-detail-group').style.display = isCsv ? 'none' : '';
-    showPanelState('empty');
-    hideFooter();
-    previewContent = null;
-    document.getElementById('ep-dl-pdf').style.display  = 'none';
-    document.getElementById('ep-dl-pptx').style.display = 'none';
-    const csvBtn = document.getElementById('ep-dl-csv');
-    if (csvBtn) csvBtn.style.display = 'none';
-    document.getElementById('ep-progress-fill').style.width = '0%';
-    document.getElementById('ep-steps').innerHTML = '';
-});
-
   function setProgress(pct, label) {
     document.getElementById('ep-progress-fill').style.width = pct + '%';
     document.getElementById('ep-progress-label').textContent = label;
   }
 
   /* ======================================================================
-     DOWNLOAD
+     FORMAT CHANGE LISTENER — at top level, registered after DOM ready
+     ====================================================================== */
+  document.getElementById('ep-format').addEventListener('change', function() {
+    var isCsv = this.value === 'csv';
+    document.getElementById('ep-detail-group').style.display = isCsv ? 'none' : '';
+    showPanelState('empty');
+    hideFooter();
+    previewContent = null;
+    document.getElementById('ep-dl-pdf').style.display   = 'none';
+    document.getElementById('ep-dl-pptx').style.display  = 'none';
+    document.getElementById('ep-dl-csv').style.display   = 'none';
+    document.getElementById('ep-progress-fill').style.width = '0%';
+    document.getElementById('ep-steps').innerHTML = '';
+  });
+
+  /* ======================================================================
+     GENERATE PREVIEW  — properly closed function
+     ====================================================================== */
+  async function generatePreview() {
+    if (exportBusy) return;
+    if (history.length === 0) { showToast('Start a conversation first before exporting.', 'error'); return; }
+
+    var title  = document.getElementById('ep-title').value.trim() || 'Pipeline Intelligence Report';
+    var format = document.getElementById('ep-format').value;
+    var detail = document.getElementById('ep-detail').value;
+
+    // CSV shortcut
+    if (format === 'csv') {
+      if (!datasetRows || datasetRows === 0) { showToast('No dataset found. Run a query first, then export.', 'error'); return; }
+      showPanelState('preview');
+      document.getElementById('ep-preview-content').innerHTML =
+        '<div style="display:flex;flex-direction:column;gap:12px;padding:4px 0;">' +
+          '<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:#E8F5E9;border:1px solid #C8E6C9;border-radius:8px;">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="#2E7D32" stroke-width="2.5" style="width:20px;height:20px;flex-shrink:0;"><polyline points="20 6 9 17 4 12"/></svg>' +
+            '<span style="color:#1B5E20;font-weight:600;font-size:14px;">' + datasetRows.toLocaleString() + ' rows ready to export</span>' +
+          '</div>' +
+          '<p style="color:#555;font-size:13px;line-height:1.6;margin:0;">The CSV will contain the raw data with the original column headers from the database.</p>' +
+        '</div>';
+      document.getElementById('ep-preview-meta-text').textContent = datasetRows.toLocaleString() + ' rows · Raw data · No AI summary';
+      document.getElementById('ep-dl-pdf').style.display  = 'none';
+      document.getElementById('ep-dl-pptx').style.display = 'none';
+      var csvBtn = document.getElementById('ep-dl-csv');
+      csvBtn.style.display = 'flex';
+      document.getElementById('ep-csv-label').textContent = 'Download All ' + datasetRows.toLocaleString() + ' Rows (CSV)';
+      showFooter();
+      return;
+    }
+
+    exportBusy = true;
+    document.getElementById('ep-generate-btn').disabled = true;
+    hideFooter();
+    showPanelState('loading');
+
+    var steps = ['Reading conversation context…','Extracting data & metrics…','Structuring document sections…','Formatting content…'];
+    var stepsEl = document.getElementById('ep-steps');
+    stepsEl.innerHTML = '';
+    setProgress(5, steps[0]);
+
+    for (var i = 0; i < steps.length; i++) {
+      await sleep(i === 0 ? 200 : 600);
+      var step = document.createElement('div');
+      step.className = 'ep-loading-step';
+      step.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>' + steps[i];
+      stepsEl.appendChild(step);
+      setProgress(15 + i * 20, steps[Math.min(i + 1, steps.length - 1)]);
+    }
+
+    try {
+      var res = await fetch('/export/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversation: history,
+          title: title,
+          export_type: format,
+          detail_level: detail,
+          session_id: SESSION_ID
+        }),
+      });
+      if (!res.ok) {
+        var errBody = {};
+        try { errBody = await res.json(); } catch(_) {}
+        throw new Error(errBody.detail || ('HTTP ' + res.status));
+      }
+      var data = await res.json();
+      previewContent = data.content;
+      if (data.total_rows > 0) datasetRows = data.total_rows;
+      setProgress(100, 'Done!');
+      await sleep(400);
+
+      document.getElementById('ep-preview-content').innerHTML = marked.parse(previewContent);
+      var rowNote = data.total_rows > 0 ? ' · ' + data.total_rows.toLocaleString() + ' rows' : '';
+      var metaText = 'Preview ready' + rowNote + ' · ' + data.word_count + ' words · ' + data.generated_at;
+      if (data.filters) metaText += ' · Filters: ' + data.filters;
+      document.getElementById('ep-preview-meta-text').textContent = metaText;
+
+      showPanelState('preview');
+      document.getElementById('ep-dl-pdf').style.display  = format === 'pdf'  ? 'flex' : 'none';
+      document.getElementById('ep-dl-pptx').style.display = format === 'pptx' ? 'flex' : 'none';
+      document.getElementById('ep-dl-csv').style.display  = 'none';
+      showFooter();
+
+    } catch(err) {
+      showPanelState('empty');
+      showToast('Export failed: ' + err.message, 'error');
+      appendBubble('assistant',
+        '⚠️ **Export preview failed:** ' + err.message + '\n\n' +
+        '**Tips:**\n' +
+        '- Try switching **Detail Level** to **Summary**\n' +
+        '- If the conversation is very long, start a **New Chat**, run your key query again, then export\n' +
+        '- Try again in a few seconds if this was a timeout'
+      );
+    } finally {
+      exportBusy = false;
+      document.getElementById('ep-generate-btn').disabled = false;
+    }
+  }  // ← generatePreview closes HERE
+
+  /* ======================================================================
+     DOWNLOAD DOC  — top-level function
      ====================================================================== */
   async function downloadDoc(format) {
     if (!previewContent) { showToast('Generate a preview first.', 'error'); return; }
-    const title = document.getElementById('ep-title').value.trim() || 'Pipeline Intelligence Report';
-    const dlBtn = document.getElementById(format === 'pdf' ? 'ep-dl-pdf' : 'ep-dl-pptx');
+    var title = document.getElementById('ep-title').value.trim() || 'Pipeline Intelligence Report';
+    var dlBtn = document.getElementById(format === 'pdf' ? 'ep-dl-pdf' : 'ep-dl-pptx');
     dlBtn.disabled = true;
-    const orig = dlBtn.innerHTML;
-    dlBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:15px;height:15px;"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>Building…`;
-    showToast(`Building ${format.toUpperCase()}…`, '');
+    var orig = dlBtn.innerHTML;
+    dlBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:15px;height:15px;"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>Building…';
+    showToast('Building ' + format.toUpperCase() + '…', '');
     try {
-      const res = await fetch('/export/download', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ format, content: previewContent, title, session_id: SESSION_ID }),
+      var res = await fetch('/export/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format: format, content: previewContent, title: title, session_id: SESSION_ID }),
       });
-      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).detail || `HTTP ${res.status}`);
-      const a = document.createElement('a');
+      if (!res.ok) {
+        var errJson = await res.json().catch(function() { return {}; });
+        throw new Error(errJson.detail || ('HTTP ' + res.status));
+      }
+      var a = document.createElement('a');
       a.href = URL.createObjectURL(await res.blob());
-      a.download = `${title.replace(/\s+/g,'_')}.${format}`;
-      a.click(); URL.revokeObjectURL(a.href);
-      showToast(`✅ ${format.toUpperCase()} downloaded!`, 'success');
+      a.download = title.replace(/\s+/g,'_') + '.' + format;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      showToast('✅ ' + format.toUpperCase() + ' downloaded!', 'success');
     } catch(err) {
       showToast('Download failed: ' + err.message, 'error');
     } finally {
-      dlBtn.innerHTML = orig; dlBtn.disabled = false;
+      dlBtn.innerHTML = orig;
+      dlBtn.disabled = false;
     }
   }
 
+  /* ======================================================================
+     DOWNLOAD CSV  — top-level function
+     ====================================================================== */
   async function downloadCSV() {
-    const title  = document.getElementById('ep-title').value.trim() || 'deals-export';
-    const csvBtn = document.getElementById('ep-dl-csv');
-    const orig   = csvBtn ? csvBtn.innerHTML : '';
+    var title  = document.getElementById('ep-title').value.trim() || 'deals-export';
+    var csvBtn = document.getElementById('ep-dl-csv');
+    var orig   = csvBtn ? csvBtn.innerHTML : '';
     if (csvBtn) csvBtn.disabled = true;
-    showToast(`Exporting ${datasetRows > 0 ? datasetRows.toLocaleString() + ' rows' : 'data'} as CSV…`, '');
+    showToast('Exporting ' + (datasetRows > 0 ? datasetRows.toLocaleString() + ' rows' : 'data') + ' as CSV…', '');
     try {
-      const res = await fetch('/export/download', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ format: 'csv', title, session_id: SESSION_ID }),
+      var res = await fetch('/export/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ format: 'csv', title: title, session_id: SESSION_ID }),
       });
-      if (!res.ok) throw new Error((await res.json().catch(()=>({}))).detail || `HTTP ${res.status}`);
-      const totalRows = res.headers.get('X-Total-Rows') || datasetRows;
-      const a = document.createElement('a');
+      if (!res.ok) {
+        var errJson = await res.json().catch(function() { return {}; });
+        throw new Error(errJson.detail || ('HTTP ' + res.status));
+      }
+      var totalRows = res.headers.get('X-Total-Rows') || datasetRows;
+      var a = document.createElement('a');
       a.href = URL.createObjectURL(await res.blob());
-      a.download = `${title.replace(/\s+/g,'_')}.csv`;
-      a.click(); URL.revokeObjectURL(a.href);
-      showToast(`✅ CSV exported — all ${Number(totalRows).toLocaleString()} rows!`, 'success');
+      a.download = title.replace(/\s+/g,'_') + '.csv';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      showToast('✅ CSV exported — all ' + Number(totalRows).toLocaleString() + ' rows!', 'success');
     } catch(err) {
       showToast('CSV export failed: ' + err.message, 'error');
     } finally {
@@ -1449,33 +1448,34 @@ async function generatePreview() {
      ====================================================================== */
   function newChat() {
     history = []; previewContent = null; datasetRows = 0;
-    const msgs = document.getElementById('messages');
-    msgs.innerHTML = `
-      <div id="welcome">
-        <div class="welcome-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-          </svg>
-        </div>
-        <h2>Hey, I'm DIUD 👋</h2>
-        <p>I'm your Data Intelligence Agent here to help you analyse live ClickHouse or Web data.<br>
-           Ask me about pipeline deals, AE performance, win/loss analysis, BANT rates, regional breakdowns, and more.<br><br>
-           <em style="color:var(--txt-dim);font-size:12px;">💡 Tip: Ask "give me those deals as CSV" or "export as PDF" to download the exact data.</em></p>
-      </div>`;
+    var msgs = document.getElementById('messages');
+    msgs.innerHTML =
+      '<div id="welcome">' +
+        '<div class="welcome-icon">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">' +
+            '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>' +
+          '</svg>' +
+        '</div>' +
+        '<h2>Hey, I\'m DIUD 👋</h2>' +
+        '<p>I\'m your Data Intelligence Agent here to help you analyse live ClickHouse or Web data.<br>' +
+           'Ask me about pipeline deals, AE performance, win/loss analysis, BANT rates, regional breakdowns, and more.<br><br>' +
+           '<em style="color:var(--txt-dim);font-size:12px;">💡 Tip: Ask "give me those deals as CSV" or "export as PDF" to download the exact data.</em></p>' +
+      '</div>';
     updateDatasetBadge();
     if (panelOpen) closeExportPanel();
     input.value = '';
     input.style.height = 'auto';
-}
+  }
 
   /* ======================================================================
      TOAST
      ====================================================================== */
-  let _toastTimer;
+  var _toastTimer;
   function showToast(msg, type) {
     type = type || '';
-    const t = document.getElementById('toast');
-    t.textContent = msg; t.className = 'show ' + type;
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'show ' + type;
     clearTimeout(_toastTimer);
     _toastTimer = setTimeout(function() { t.className = ''; }, 4000);
   }
@@ -1484,20 +1484,23 @@ async function generatePreview() {
      CONNECTION HEALTH CHECK
      ====================================================================== */
   async function checkConn() {
-    const badge = document.getElementById('conn-badge');
-    const label = document.getElementById('conn-label');
+    var badge = document.getElementById('conn-badge');
+    var label = document.getElementById('conn-label');
     badge.className = 'conn-badge checking';
     label.textContent = 'Checking…';
     try {
-      const res  = await fetch('/debug/db');
-      const data = await res.json();
+      var res  = await fetch('/debug/db');
+      var data = await res.json();
       if (data.status === 'OK') {
-        badge.className = 'conn-badge ok'; label.textContent = 'DB Connected ✓';
+        badge.className = 'conn-badge ok';
+        label.textContent = 'DB Connected ✓';
       } else {
-        badge.className = 'conn-badge fail'; label.textContent = 'DB Unreachable';
+        badge.className = 'conn-badge fail';
+        label.textContent = 'DB Unreachable';
       }
-    } catch {
-      badge.className = 'conn-badge fail'; label.textContent = 'DB Unreachable';
+    } catch(_) {
+      badge.className = 'conn-badge fail';
+      label.textContent = 'DB Unreachable';
     }
   }
 
