@@ -88,6 +88,10 @@ def _store_result(session_id: str, result: QueryResult):
     _SESSION_STORE[session_id]      = result
     _SESSION_TIMESTAMPS[session_id] = datetime.utcnow()
 
+def _get_result(session_id: str) -> Optional[QueryResult]:
+    """Fetch a previously stored query result for a session, if any."""
+    return _SESSION_STORE.get(session_id)
+
 def _cleanup_sessions():
     cutoff  = datetime.utcnow() - timedelta(hours=4)
     expired = [sid for sid, ts in list(_SESSION_TIMESTAMPS.items()) if ts < cutoff]
@@ -1750,9 +1754,8 @@ async def export_preview(req: ExportPreviewRequest):
 
     print(f"📄 [export/preview] session={req.session_id} type={req.export_type} detail={req.detail_level}")
 
-    stored = _get_result(req.session_id) if req.session_id else None
-
     try:
+        stored = _get_result(req.session_id) if req.session_id else None
         ai_content = _generate_export_content(
             conversation   = req.conversation,
             title          = req.title,
