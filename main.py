@@ -1456,7 +1456,7 @@ REQUIREMENTS:
 Generate the document now:"""
 
     response = _ai_client.messages.create(
-        model=selected_model,
+        model=_CLAUDE_MODEL,
         system  = "You are a professional business report writer. Generate clean, well-structured documents.",
         messages= [{"role": "user", "content": prompt}],
         temperature = 0,
