@@ -1318,7 +1318,6 @@ async function generatePreview() {
     setProgress(15 + i * 20, steps[Math.min(i + 1, steps.length - 1)]);
   }
   try {
-    setProgress(75, 'AI generating document…');
     const res = await fetch('/export/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1331,8 +1330,10 @@ async function generatePreview() {
       }),
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${res.status}`);
+      let errBody = {};
+      try { errBody = await res.json(); } catch(_) {}
+      const errMsg = errBody.detail || `HTTP ${res.status}`;
+      throw new Error(errMsg);
     }
     const data = await res.json();
     previewContent = data.content;
@@ -1359,13 +1360,16 @@ async function generatePreview() {
 
   } catch(err) {
     showPanelState('empty');
-    showToast('Preview generation failed: ' + err.message, 'error');
-    appendBubble('assistant', `⚠️ **Export preview failed:** ${err.message}`);
-  } finally {
-    exportBusy = false;
-    document.getElementById('ep-generate-btn').disabled = false;
+    const msg = err.message || 'Unknown error';
+    showToast('Export failed: ' + msg, 'error');
+    appendBubble('assistant',
+      `⚠️ **Export preview failed:** ${msg}\n\n` +
+      `**Tips:**\n` +
+      `- Try switching **Detail Level** to **Summary** instead of Entire Conversation\n` +
+      `- If the conversation is very long, click **New Chat**, run your key query again, then export\n` +
+      `- Try again in a few seconds if this was a timeout`
+    );
   }
-}
 
   document.getElementById('ep-format').addEventListener('change', function() {
     const isCsv = this.value === 'csv';
