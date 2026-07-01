@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: diud
+    runtime: python
+    buildCommand: pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/.playwright playwright install chromium --with-deps
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
